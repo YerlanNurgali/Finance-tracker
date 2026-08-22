@@ -15,9 +15,15 @@ while True:
             income = float(input("Введите сумму дохода: "))
 
             if income > 0:
-                balance += income
-                operations.append(f"Доход: +{income} тенге | Баланс: {balance} тенге")
-                print("Доход добавлен!")
+                 balance += income
+                 operation = f"Доход: +{income} тенге | Баланс: {balance} тенге"
+
+                 operations.append(operation)
+
+                 with open("operations.txt", "a") as file:
+                     file.write(operation + "\n")
+
+                 print("Доход добавлен!")
             else:
                 print("Ошибка: сумма должна быть больше 0.")
 
@@ -36,8 +42,14 @@ while True:
 
              else:
                  balance -= expense
-                 operations.append(f"Расход: -{expense} тенге | Баланс: {balance} тенге")
-                 print("Расход добавлен!")
+                 operation = f"Расход: -{expense} тенге | Баланс: {balance} тенге"
+
+                 operations.append(operation)
+
+                 with open("operations.txt", "a") as file:
+                     file.write(operation + "\n")
+
+                     print("Расход добавлен!")
 
          except ValueError:
              print("Ошибка: введите число.")
