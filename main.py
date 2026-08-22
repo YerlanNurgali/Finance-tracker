@@ -1,25 +1,87 @@
-balance = 0
-operations = []
+def load_operations():
+    operations = []
+    balance = 0
 
-try:
-    with open("operations.txt", "r") as file:
-        for line in file:
-            operation = line.strip()
+    try:
+        with open("operations.txt", "r") as file:
+            for line in file:
+                operation = line.strip()
 
-            if operation:
-                operations.append(operation)
+                if operation:
+                    operations.append(operation)
 
-                if operation.startswith("Доход:"):
-                    amount = float(operation.split("+")[1].split(" тенге")[0])
-                    balance += amount
+                    if operation.startswith("Доход:"):
+                        amount = float(operation.split("+")[1].split(" тенге")[0])
+                        balance += amount
 
-                elif operation.startswith("Расход:"):
-                    amount = float(operation.split("-")[1].split(" тенге")[0])
-                    balance -= amount
+                    elif operation.startswith("Расход:"):
+                        amount = float(operation.split("-")[1].split(" тенге")[0])
+                        balance -= amount
 
-except FileNotFoundError:
-    pass
+    except FileNotFoundError:
+        pass
 
+    return operations, balance
+
+
+operations, balance = load_operations()
+
+
+
+def save_operation(operation):
+    with open("operations.txt", "a") as file:
+        file.write(operation + "\n")
+
+def add_income(balance, operations):
+    try:
+        income = float(input("Введите сумму дохода: "))
+
+        if income <= 0:
+            print("Ошибка: сумма должна быть больше 0.")
+            return balance
+
+        balance += income
+
+        operation = f"Доход: +{income} тенге"
+        operations.append(operation)
+        save_operation(operation)
+
+        print("Доход добавлен!")
+
+        return balance
+
+    except ValueError:
+        print("Ошибка: введите число.")
+        return balance
+
+def add_expense(balance, operations):
+    try:
+        expense = float(input("Введите сумму расхода: "))
+
+        if expense <= 0:
+            print("Ошибка: сумма должна быть больше 0.")
+            return balance
+
+        if expense > balance:
+            print("Ошибка: недостаточно средств.")
+            return balance
+
+        balance -= expense
+
+        operation = f"Расход: -{expense} тенге"
+        operations.append(operation)
+        save_operation(operation)
+
+        print("Расход добавлен!")
+
+        return balance
+
+    except ValueError:
+        print("Ошибка: введите число.")
+        return balance
+
+def show_balance(balance):
+    print(f"Ваш баланс: {balance} тенге")
 
 while True:
     print("1. Добавить доход")
@@ -30,49 +92,13 @@ while True:
 
     choice = input("Выберите действие: ")
 
+
     if choice == "1":
-        try:
-            income = float(input("Введите сумму дохода: "))
+        balance = add_income(balance, operations)
 
-            if income > 0:
-                 balance += income
-                 operation = f"Доход: +{income} тенге"
-
-                 operations.append(operation)
-
-                 with open("operations.txt", "a") as file:
-                     file.write(operation + "\n")
-
-                 print("Доход добавлен!")
-            else:
-                print("Ошибка: сумма должна быть больше 0.")
-
-        except ValueError:
-            print("Ошибка: введите число.")
 
     elif choice == "2":
-         try:
-             expense = float(input("Введите сумму расхода: "))
-
-             if expense <= 0:
-                 print("Ошибка: сумма должна быть больше 0.")
-
-             elif expense > balance:
-                 print("Ошибка: недостаточно средств.")
-
-             else:
-                 balance -= expense
-                 operation = f"Расход: -{expense} тенге"
-
-                 operations.append(operation)
-
-                 with open("operations.txt", "a") as file:
-                     file.write(operation + "\n")
-
-                     print("Расход добавлен!")
-
-         except ValueError:
-             print("Ошибка: введите число.")
+        balance = add_expense(balance, operations)
 
     elif choice == "3":
         print(f"Ваш баланс: {balance} тенге")
