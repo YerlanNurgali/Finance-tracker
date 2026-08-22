@@ -1,6 +1,21 @@
 balance = 0
 operations = []
 
+try:
+    with open("operations.txt", "r") as file:
+        for line in file:
+            operation = line.strip()
+
+            if operation:
+                operations.append(operation)
+
+                if "Баланс: " in operation:
+                    balance_part = operation.split("Баланс: ")[1]
+                    balance = float(balance_part.replace(" тенге", ""))
+
+except FileNotFoundError:
+    pass
+
 while True:
     print("1. Добавить доход")
     print("2. Добавить расход")
