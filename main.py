@@ -9,12 +9,17 @@ try:
             if operation:
                 operations.append(operation)
 
-                if "Баланс: " in operation:
-                    balance_part = operation.split("Баланс: ")[1]
-                    balance = float(balance_part.replace(" тенге", ""))
+                if operation.startswith("Доход:"):
+                    amount = float(operation.split("+")[1].split(" тенге")[0])
+                    balance += amount
+
+                elif operation.startswith("Расход:"):
+                    amount = float(operation.split("-")[1].split(" тенге")[0])
+                    balance -= amount
 
 except FileNotFoundError:
     pass
+
 
 while True:
     print("1. Добавить доход")
@@ -31,7 +36,7 @@ while True:
 
             if income > 0:
                  balance += income
-                 operation = f"Доход: +{income} тенге | Баланс: {balance} тенге"
+                 operation = f"Доход: +{income} тенге"
 
                  operations.append(operation)
 
@@ -57,7 +62,7 @@ while True:
 
              else:
                  balance -= expense
-                 operation = f"Расход: -{expense} тенге | Баланс: {balance} тенге"
+                 operation = f"Расход: -{expense} тенге"
 
                  operations.append(operation)
 
