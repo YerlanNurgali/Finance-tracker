@@ -141,6 +141,54 @@ def format_operation(operation):
 
     return operation
 
+def show_statistics(operations):
+    total_income = 0
+    total_expense = 0
+    categories = {}
+
+    for operation in operations:
+        if "|" in operation:
+            parts = [part.strip() for part in operation.split("|")]
+
+            operation_data = parts[1]
+
+            if operation_data.startswith("Доход:"):
+                amount = float(operation_data.split("+")[1].split(" тенге")[0])
+                total_income += amount
+
+            elif operation_data.startswith("Расход:"):
+                amount = float(operation_data.split("-")[1].split(" тенге")[0])
+                total_expense += amount
+
+                if len(parts) > 2 and parts[2].startswith("Категория:"):
+                    category = parts[2].replace("Категория:", "").strip()
+
+                    if category not in categories:
+                        categories[category] = 0
+
+                    categories[category] += amount
+
+        else:
+            if operation.startswith("Доход:"):
+                amount = float(operation.split("+")[1].split(" тенге")[0])
+                total_income += amount
+
+            elif operation.startswith("Расход:"):
+                amount = float(operation.split("-")[1].split(" тенге")[0])
+                total_expense += amount
+
+    print("\n--- СТАТИСТИКА ---")
+    print(f"Всего доходов: {format_money(total_income)} тенге")
+    print(f"Всего расходов: {format_money(total_expense)} тенге")
+
+    print("\nРасходы по категориям:")
+
+    if len(categories) == 0:
+        print("Категорий пока нет.")
+    else:
+        for category, amount in categories.items():
+            print(f"{category}: {format_money(amount)} тенге")
+
 def show_history(operations):
     print("\n--- ИСТОРИЯ ОПЕРАЦИЙ ---")
 
@@ -158,8 +206,9 @@ def main():
         print("2. Добавить расход")
         print("3. Показать баланс")
         print("4. Показать историю")
-        print("5. Выход")
-
+        print("5. Показать статистику")
+        print("6. Выход")
+        
         choice = input("Выберите действие: ")
 
         if choice == "1":
@@ -175,6 +224,9 @@ def main():
             show_history(operations)
 
         elif choice == "5":
+            show_statistics(operations)
+
+        elif choice == "6":
             print("До свидания!")
             break
 
