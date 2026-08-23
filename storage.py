@@ -16,16 +16,23 @@ def load_operations():
                         operation_data = operation
 
                     if operation_data.startswith("Доход:"):
-                        amount = float(
-                            operation_data.split("+")[1].split(" тенге")[0]
-                        )
-                        balance += amount
+                        try:
+                            amount = float(
+                                operation_data.split("+")[1].split(" тенге")[0]
+                            )
+                            balance += amount
+                        except (ValueError, IndexError):
+                            continue
 
                     elif operation_data.startswith("Расход:"):
-                        amount = float(
-                            operation_data.split("-")[1].split(" тенге")[0]
-                        )
-                        balance -= amount
+                        try:
+                            amount = float(
+                                operation_data.split("-")[1].split(" тенге")[0]
+                            )
+                            balance -= amount
+                        except (ValueError, IndexError):
+                            continue
+
 
     except FileNotFoundError:
         pass
