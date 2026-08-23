@@ -83,6 +83,15 @@ def add_expense(balance, operations):
 def show_balance(balance):
     print(f"Ваш баланс: {balance} тенге")
 
+def show_history(operations):
+    print("\n--- ИСТОРИЯ ОПЕРАЦИЙ ---")
+
+    if len(operations) == 0:
+        print("Операций пока нет.")
+    else:
+        for number, operation in enumerate(operations, start=1):
+            print(f"{number}. {operation}")
+
 while True:
     print("1. Добавить доход")
     print("2. Добавить расход")
@@ -101,16 +110,10 @@ while True:
         balance = add_expense(balance, operations)
 
     elif choice == "3":
-        print(f"Ваш баланс: {balance} тенге")
+         show_balance(balance)
 
     elif choice == "4":
-         print("\n--- ИСТОРИЯ ОПЕРАЦИЙ ---")
-
-         if len(operations) == 0:
-             print("Операций пока нет.")
-         else:
-             for number, operation in enumerate(operations, start=1):
-                 print(f"{number}. {operation}")
+         show_history(operations)
 
     elif choice == "5":
          print("До свидания!")
