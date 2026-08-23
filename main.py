@@ -301,6 +301,13 @@ def edit_operation(operations):
             elif operation_data.startswith("Расход:"):
                 parts[1] = f" Расход: -{new_amount} тенге"
 
+                category = choose_category()
+
+                if len(parts) > 2 and parts[2].strip().startswith("Категория:"):
+                    parts[2] = f" Категория: {category}"
+                else:
+                    parts.append(f" Категория: {category}")
+
             operations[choice - 1] = "|".join(parts)
 
         else:
