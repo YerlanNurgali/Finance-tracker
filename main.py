@@ -239,6 +239,84 @@ def show_category_chart(operations):
             f"{format_money(amount)} тенге"
         )
 
+def calculate_balance(operations):
+    balance = 0
+
+    for operation in operations:
+        if "|" in operation:
+            operation_data = operation.split("|", 1)[1].strip()
+        else:
+            operation_data = operation
+
+        if operation_data.startswith("Доход:"):
+            amount = float(
+                operation_data.split("+")[1].split(" тенге")[0]
+            )
+            balance += amount
+
+        elif operation_data.startswith("Расход:"):
+            amount = float(
+                operation_data.split("-")[1].split(" тенге")[0]
+            )
+            balance -= amount
+
+    return balance
+
+def edit_operation(operations):
+    print("\n--- РЕДАКТИРОВАНИЕ ОПЕРАЦИИ ---")
+
+    if len(operations) == 0:
+        print("Операций пока нет.")
+        return
+
+    for number, operation in enumerate(operations, start=1):
+        print(f"{number}. {format_operation(operation)}")
+
+    try:
+        choice = int(input("Введите номер операции для редактирования: "))
+
+        if choice < 1 or choice > len(operations):
+            print("Ошибка: такой операции нет.")
+            return
+
+        old_operation = operations[choice - 1]
+
+        print(f"\nТекущая операция:")
+        print(format_operation(old_operation))
+
+        new_amount = float(input("Введите новую сумму: "))
+
+        if new_amount <= 0:
+            print("Ошибка: сумма должна быть больше 0.")
+            return
+
+        if "|" in old_operation:
+            parts = old_operation.split("|")
+
+            operation_data = parts[1].strip()
+
+            if operation_data.startswith("Доход:"):
+                parts[1] = f" Доход: +{new_amount} тенге"
+
+            elif operation_data.startswith("Расход:"):
+                parts[1] = f" Расход: -{new_amount} тенге"
+
+            operations[choice - 1] = "|".join(parts)
+
+        else:
+            if old_operation.startswith("Доход:"):
+                operations[choice - 1] = f"Доход: +{new_amount} тенге"
+
+            elif old_operation.startswith("Расход:"):
+                operations[choice - 1] = f"Расход: -{new_amount} тенге"
+
+        save_operations(operations)
+
+        print("Операция изменена!")
+
+    except ValueError:
+        print("Ошибка: введите число.")
+
 def delete_operation(operations):
     print("\n--- УДАЛЕНИЕ ОПЕРАЦИИ ---")
 
@@ -285,7 +363,8 @@ def main():
         print("5. Показать статистику")
         print("6. Показать диаграмму")
         print("7. Удалить операцию")
-        print("8. Выход")
+        print("8. Редактировать операцию")
+        print("9. Выход")
         
         choice = input("Выберите действие: ")
 
@@ -309,8 +388,13 @@ def main():
 
         elif choice == "7":
             delete_operation(operations)
+            balance = calculate_balance(operations)
 
         elif choice == "8":
+            edit_operation(operations)
+            balance = calculate_balance(operations)
+
+        elif choice == "9":
             print("До свидания!")
             break
 
