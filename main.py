@@ -228,6 +228,56 @@ def show_statistics(operations):
                 f"({percentage:.1f}%)"
         )
 
+def get_category_expenses(operations):
+    categories = {}
+
+    for operation in operations:
+        if "|" not in operation:
+            continue
+
+        parts = [part.strip() for part in operation.split("|")]
+
+        if len(parts) < 2:
+            continue
+
+        operation_data = parts[1]
+
+        if not operation_data.startswith("Расход:"):
+            continue
+
+        amount = float(operation_data.split("-")[1].split(" тенге")[0])
+
+        if len(parts) > 2 and parts[2].startswith("Категория:"):
+            category = parts[2].replace("Категория:", "").strip()
+
+            if category not in categories:
+                categories[category] = 0
+
+            categories[category] += amount
+
+    return categories
+
+def show_category_chart(operations):
+    categories = get_category_expenses(operations)
+
+    print("\n--- РАСХОДЫ ПО КАТЕГОРИЯМ ---")
+
+    if len(categories) == 0:
+        print("Категорий пока нет.")
+        return
+
+    max_amount = max(categories.values())
+
+    for category, amount in categories.items():
+        bar_length = int(amount / max_amount * 20)
+
+        bar = "█" * bar_length
+
+        print(
+            f"{category:<12} {bar} "
+            f"{format_money(amount)} тенге"
+        )
+
 def show_history(operations):
     print("\n--- ИСТОРИЯ ОПЕРАЦИЙ ---")
 
@@ -246,7 +296,8 @@ def main():
         print("3. Показать баланс")
         print("4. Показать историю")
         print("5. Показать статистику")
-        print("6. Выход")
+        print("6. Показать диаграмму")
+        print("7. Выход")
         
         choice = input("Выберите действие: ")
 
@@ -266,8 +317,12 @@ def main():
             show_statistics(operations)
 
         elif choice == "6":
+            show_category_chart(operations)
+
+        elif choice == "7":
             print("До свидания!")
             break
+
 
         else:
             print("Неверный выбор. Попробуйте ещё раз.")
