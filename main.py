@@ -181,6 +181,11 @@ def show_statistics(operations):
     print(f"Всего доходов: {format_money(total_income)} тенге")
     print(f"Всего расходов: {format_money(total_expense)} тенге")
 
+    balance = total_income - total_expense
+
+    print(f"Остаток: {format_money(balance)} тенге")
+    print(f"Всего операций: {len(operations)}")
+
     print("\nРасходы по категориям:")
 
     if len(categories) == 0:
