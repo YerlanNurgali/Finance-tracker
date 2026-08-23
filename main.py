@@ -92,32 +92,37 @@ def show_history(operations):
         for number, operation in enumerate(operations, start=1):
             print(f"{number}. {operation}")
 
-while True:
-    print("1. Добавить доход")
-    print("2. Добавить расход")
-    print("3. Показать баланс")
-    print("4. Показать историю")
-    print("5. Выход")
+def main():
+    operations, balance = load_operations()
 
-    choice = input("Выберите действие: ")
+    while True:
+        print("1. Добавить доход")
+        print("2. Добавить расход")
+        print("3. Показать баланс")
+        print("4. Показать историю")
+        print("5. Выход")
+
+        choice = input("Выберите действие: ")
+
+        if choice == "1":
+            balance = add_income(balance, operations)
+
+        elif choice == "2":
+            balance = add_expense(balance, operations)
+
+        elif choice == "3":
+            show_balance(balance)
+
+        elif choice == "4":
+            show_history(operations)
+
+        elif choice == "5":
+            print("До свидания!")
+            break
+
+        else:
+            print("Неверный выбор. Попробуйте ещё раз.")
 
 
-    if choice == "1":
-        balance = add_income(balance, operations)
-
-
-    elif choice == "2":
-        balance = add_expense(balance, operations)
-
-    elif choice == "3":
-         show_balance(balance)
-
-    elif choice == "4":
-         show_history(operations)
-
-    elif choice == "5":
-         print("До свидания!")
-         break
-
-    else:
-        print("Неверный выбор. Попробуйте ещё раз.")
+if __name__ == "__main__":
+    main()
