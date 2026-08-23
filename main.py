@@ -218,7 +218,15 @@ def show_statistics(operations):
         print("Категорий пока нет.")
     else:
         for category, amount in categories.items():
-            print(f"{category}: {format_money(amount)} тенге")
+            if total_expense > 0:
+                percentage = amount / total_expense * 100
+            else:
+                percentage = 0
+
+            print(
+                f"{category}: {format_money(amount)} тенге "
+                f"({percentage:.1f}%)"
+        )
 
 def show_history(operations):
     print("\n--- ИСТОРИЯ ОПЕРАЦИЙ ---")
