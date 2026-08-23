@@ -1,7 +1,6 @@
 from datetime import datetime
 
-from storage import load_operations, save_operation
-
+from storage import load_operations, save_operation, save_operations
 
 operations, balance = load_operations()
 
@@ -240,6 +239,32 @@ def show_category_chart(operations):
             f"{format_money(amount)} тенге"
         )
 
+def delete_operation(operations):
+    print("\n--- УДАЛЕНИЕ ОПЕРАЦИИ ---")
+
+    if len(operations) == 0:
+        print("Операций пока нет.")
+        return
+
+    for number, operation in enumerate(operations, start=1):
+        print(f"{number}. {format_operation(operation)}")
+
+    try:
+        choice = int(input("Введите номер операции для удаления: "))
+
+        if choice < 1 or choice > len(operations):
+            print("Ошибка: такой операции нет.")
+            return
+
+        deleted_operation = operations.pop(choice - 1)
+
+        save_operations(operations)
+
+        print(f"Операция удалена: {format_operation(deleted_operation)}")
+
+    except ValueError:
+        print("Ошибка: введите номер операции.")
+
 def show_history(operations):
     print("\n--- ИСТОРИЯ ОПЕРАЦИЙ ---")
 
@@ -259,7 +284,8 @@ def main():
         print("4. Показать историю")
         print("5. Показать статистику")
         print("6. Показать диаграмму")
-        print("7. Выход")
+        print("7. Удалить операцию")
+        print("8. Выход")
         
         choice = input("Выберите действие: ")
 
@@ -282,6 +308,9 @@ def main():
             show_category_chart(operations)
 
         elif choice == "7":
+            delete_operation(operations)
+
+        elif choice == "8":
             print("До свидания!")
             break
 

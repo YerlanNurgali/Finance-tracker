@@ -43,3 +43,9 @@ def load_operations():
 def save_operation(operation):
     with open("operations.txt", "a") as file:
         file.write(operation + "\n")
+
+
+def save_operations(operations):
+    with open("operations.txt", "w") as file:
+        for operation in operations:
+            file.write(operation + "\n")
