@@ -77,8 +77,6 @@ def choose_category():
     print("5. Здоровье")
     print("6. Другое")
 
-    choice = input("Ваш выбор: ")
-
     categories = {
         "1": "Еда",
         "2": "Транспорт",
@@ -88,7 +86,13 @@ def choose_category():
         "6": "Другое"
     }
 
-    return categories.get(choice, "Другое")
+    while True:
+        choice = input("Ваш выбор: ")
+
+        if choice in categories:
+            return categories[choice]
+
+        print("Ошибка: выберите число от 1 до 6.")
 
 def add_expense(balance, operations):
     try:
