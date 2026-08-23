@@ -1,3 +1,5 @@
+from datetime import datetime
+
 def load_operations():
     operations = []
     balance = 0
@@ -10,19 +12,27 @@ def load_operations():
                 if operation:
                     operations.append(operation)
 
-                    if operation.startswith("Доход:"):
-                        amount = float(operation.split("+")[1].split(" тенге")[0])
+                    if "|" in operation:
+                        operation_data = operation.split("|", 1)[1].strip()
+                    else:
+                        operation_data = operation
+
+                    if operation_data.startswith("Доход:"):
+                        amount = float(
+                            operation_data.split("+")[1].split(" тенге")[0]
+                        )
                         balance += amount
 
-                    elif operation.startswith("Расход:"):
-                        amount = float(operation.split("-")[1].split(" тенге")[0])
+                    elif operation_data.startswith("Расход:"):
+                        amount = float(
+                            operation_data.split("-")[1].split(" тенге")[0]
+                        )
                         balance -= amount
 
     except FileNotFoundError:
         pass
 
     return operations, balance
-
 
 operations, balance = load_operations()
 
@@ -41,8 +51,9 @@ def add_income(balance, operations):
             return balance
 
         balance += income
+        date = datetime.now().strftime("%d.%m.%Y %H:%M")
+        operation = f"{date} | Доход: +{income} тенге"
 
-        operation = f"Доход: +{income} тенге"
         operations.append(operation)
         save_operation(operation)
 
@@ -68,7 +79,8 @@ def add_expense(balance, operations):
 
         balance -= expense
 
-        operation = f"Расход: -{expense} тенге"
+        date = datetime.now().strftime("%d.%m.%Y %H:%M")
+        operation = f"{date} | Расход: -{expense} тенге"
         operations.append(operation)
         save_operation(operation)
 
@@ -80,8 +92,35 @@ def add_expense(balance, operations):
         print("Ошибка: введите число.")
         return balance
 
+def format_money(amount):
+    return f"{amount:,.0f}".replace(",", " ")
+
 def show_balance(balance):
-    print(f"Ваш баланс: {balance} тенге")
+    print(f"Ваш баланс: {format_money(balance)} тенге")
+
+def format_operation(operation):
+    if "|" in operation:
+        date, operation_data = operation.split("|", 1)
+        date = date.strip()
+        operation_data = operation_data.strip()
+
+        if operation_data.startswith("Доход:"):
+            amount = float(operation_data.split("+")[1].split(" тенге")[0])
+            return f"{date} | Доход: +{format_money(amount)} тенге"
+
+        elif operation_data.startswith("Расход:"):
+            amount = float(operation_data.split("-")[1].split(" тенге")[0])
+            return f"{date} | Расход: -{format_money(amount)} тенге"
+
+    if operation.startswith("Доход:"):
+        amount = float(operation.split("+")[1].split(" тенге")[0])
+        return f"Доход: +{format_money(amount)} тенге"
+
+    elif operation.startswith("Расход:"):
+        amount = float(operation.split("-")[1].split(" тенге")[0])
+        return f"Расход: -{format_money(amount)} тенге"
+
+    return operation
 
 def show_history(operations):
     print("\n--- ИСТОРИЯ ОПЕРАЦИЙ ---")
@@ -90,7 +129,7 @@ def show_history(operations):
         print("Операций пока нет.")
     else:
         for number, operation in enumerate(operations, start=1):
-            print(f"{number}. {operation}")
+            print(f"{number}. {format_operation(operation)}")
 
 def main():
     operations, balance = load_operations()
