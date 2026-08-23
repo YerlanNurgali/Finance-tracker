@@ -68,6 +68,28 @@ def add_income(balance, operations):
         print("Ошибка: введите число.")
         return balance
 
+def choose_category():
+    print("\nВыберите категорию:")
+    print("1. Еда")
+    print("2. Транспорт")
+    print("3. Дом")
+    print("4. Развлечения")
+    print("5. Здоровье")
+    print("6. Другое")
+
+    choice = input("Ваш выбор: ")
+
+    categories = {
+        "1": "Еда",
+        "2": "Транспорт",
+        "3": "Дом",
+        "4": "Развлечения",
+        "5": "Здоровье",
+        "6": "Другое"
+    }
+
+    return categories.get(choice, "Другое")
+
 def add_expense(balance, operations):
     try:
         expense = float(input("Введите сумму расхода: "))
@@ -83,7 +105,7 @@ def add_expense(balance, operations):
         balance -= expense
 
         date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        category = input("Введите категорию расхода: ")
+        category = choose_category()
         operation = f"{date} | Расход: -{expense} тенге | Категория: {category}"
         
         operations.append(operation)
