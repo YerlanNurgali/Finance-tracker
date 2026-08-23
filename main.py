@@ -51,8 +51,11 @@ def add_income(balance, operations):
             return balance
 
         balance += income
+
+
         date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        operation = f"{date} | Доход: +{income} тенге"
+        category = input("Введите категорию расхода: ")
+        operation = f"{date} | Расход: -{expense} тенге | Категория: {category}"
 
         operations.append(operation)
         save_operation(operation)
@@ -80,7 +83,9 @@ def add_expense(balance, operations):
         balance -= expense
 
         date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        operation = f"{date} | Расход: -{expense} тенге"
+        category = input("Введите категорию расхода: ")
+        operation = f"{date} | Расход: -{expense} тенге | Категория: {category}"
+        
         operations.append(operation)
         save_operation(operation)
 
@@ -100,17 +105,31 @@ def show_balance(balance):
 
 def format_operation(operation):
     if "|" in operation:
-        date, operation_data = operation.split("|", 1)
-        date = date.strip()
-        operation_data = operation_data.strip()
+        parts = [part.strip() for part in operation.split("|")]
+
+        date = parts[0]
+        operation_data = parts[1]
+
+        category = ""
+
+        if len(parts) > 2 and parts[2].startswith("Категория:"):
+            category = parts[2]
 
         if operation_data.startswith("Доход:"):
             amount = float(operation_data.split("+")[1].split(" тенге")[0])
-            return f"{date} | Доход: +{format_money(amount)} тенге"
+            result = f"{date} | Доход: +{format_money(amount)} тенге"
 
         elif operation_data.startswith("Расход:"):
             amount = float(operation_data.split("-")[1].split(" тенге")[0])
-            return f"{date} | Расход: -{format_money(amount)} тенге"
+            result = f"{date} | Расход: -{format_money(amount)} тенге"
+
+        else:
+            return operation
+
+        if category:
+            result += f" | {category}"
+
+        return result
 
     if operation.startswith("Доход:"):
         amount = float(operation.split("+")[1].split(" тенге")[0])
