@@ -104,7 +104,7 @@ python -m pytest
 Текущий результат:
 
 ```text
-6 passed
+10 passed
 ```
 
 ## 📊 Пример
