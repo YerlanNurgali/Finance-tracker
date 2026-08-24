@@ -4,29 +4,35 @@ from storage import load_operations, save_operation, save_operations
 
 operations, balance = load_operations()
 
+def get_amount(message):
+    while True:
+        try:
+            amount = float(input(message))
+
+            if amount <= 0:
+                print("Ошибка: сумма должна быть больше 0.")
+                continue
+
+            return amount
+
+        except ValueError:
+            print("Ошибка: введите число.")
+
 def add_income(balance, operations):
-    try:
-        income = float(input("Введите сумму дохода: "))
+    income = get_amount("Введите сумму дохода: ")
 
-        if income <= 0:
-            print("Ошибка: сумма должна быть больше 0.")
-            return balance
+    balance += income
 
-        balance += income
+    date = datetime.now().strftime("%d.%m.%Y %H:%M")
+    operation = f"{date} | Доход: +{income} тенге"
 
-        date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        operation = f"{date} | Доход: +{income} тенге"
+    operations.append(operation)
+    save_operation(operation)
 
-        operations.append(operation)
-        save_operation(operation)
+    print("Доход добавлен!")
 
-        print("Доход добавлен!")
+    return balance
 
-        return balance
-
-    except ValueError:
-        print("Ошибка: введите число.")
-        return balance
 
 
 def choose_category():
@@ -56,33 +62,26 @@ def choose_category():
         print("Ошибка: выберите число от 1 до 6.")
 
 def add_expense(balance, operations):
-    try:
-        expense = float(input("Введите сумму расхода: "))
 
-        if expense <= 0:
-            print("Ошибка: сумма должна быть больше 0.")
-            return balance
+    expense = get_amount("Введите сумму расхода: ")
 
-        if expense > balance:
-            print("Ошибка: недостаточно средств.")
-            return balance
+    if expense > balance:
+        print("Ошибка: недостаточно средств.")
+        return balance
 
-        balance -= expense
+    balance -= expense
 
-        date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        category = choose_category()
-        operation = f"{date} | Расход: -{expense} тенге | Категория: {category}"
+    date = datetime.now().strftime("%d.%m.%Y %H:%M")
+    category = choose_category()
+    operation = f"{date} | Расход: -{expense} тенге | Категория: {category}"
         
-        operations.append(operation)
-        save_operation(operation)
+    operations.append(operation)
+    save_operation(operation)
 
-        print("Расход добавлен!")
+    print("Расход добавлен!")
 
-        return balance
+    return balance
 
-    except ValueError:
-        print("Ошибка: введите число.")
-        return balance
 
 def format_money(amount):
     return f"{amount:,.0f}".replace(",", " ")
@@ -284,7 +283,7 @@ def edit_operation(operations):
         print(f"\nТекущая операция:")
         print(format_operation(old_operation))
 
-        new_amount = float(input("Введите новую сумму: "))
+        new_amount = get_amount("Введите новую сумму: ")
 
         if new_amount <= 0:
             print("Ошибка: сумма должна быть больше 0.")
