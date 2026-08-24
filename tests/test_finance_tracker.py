@@ -1,4 +1,8 @@
 from main import parse_operation
+from main import edit_operation
+from main import add_income, add_expense
+from unittest.mock import patch
+from operations import add_income, add_expense, delete_operation
 
 
 def test_income():
@@ -81,5 +85,53 @@ def test_delete_operation():
         "Доход: +10000 тенге",
         "Доход: +5000 тенге",
     ]
+
+def test_parse_operation_with_formatted_amount():
+    operation = (
+        "24.08.2026 12:00 | "
+        "Расход: -1 500 тенге | "
+        "Категория: Еда"
+    )
+
+    operation_type, amount, category = parse_operation(operation)
+
+    assert operation_type == "Расход"
+    assert amount == 1500.0
+    assert category == "Еда"
+
+def test_add_income():
+    operations = []
+    balance = 0
+
+    with patch("builtins.input", side_effect=["5000"]):
+        new_balance = add_income(balance, operations)
+
+    assert new_balance == 5000
+    assert len(operations) == 1
+    assert "Доход: +5000" in operations[0]
+
+
+def test_add_expense():
+    operations = []
+    balance = 5000
+
+    with patch("builtins.input", side_effect=["1500", "1"]):
+        new_balance = add_expense(balance, operations)
+
+    assert new_balance == 3500
+    assert len(operations) == 1
+    assert "Расход: -1500" in operations[0]
+    assert "Категория: Еда" in operations[0]
+
+
+def test_expense_more_than_balance():
+    operations = []
+    balance = 1000
+
+    with patch("builtins.input", side_effect=["1500"]):
+        new_balance = add_expense(balance, operations)
+
+    assert new_balance == 1000
+    assert len(operations) == 0
 
 print("Все тесты пройдены!")

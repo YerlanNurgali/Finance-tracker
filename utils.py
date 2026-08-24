@@ -19,13 +19,13 @@ def parse_operation(operation):
     if operation_data.startswith("Доход:"):
         operation_type = "Доход"
         amount = float(
-            operation_data.split("+")[1].split(" тенге")[0]
+            operation_data.split("+")[1].split(" тенге")[0].replace(" ", "")
         )
 
     elif operation_data.startswith("Расход:"):
         operation_type = "Расход"
         amount = float(
-            operation_data.split("-")[1].split(" тенге")[0]
+            operation_data.split("-")[1].split(" тенге")[0].replace(" ", "")
         )
 
     return operation_type, amount, category
