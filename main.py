@@ -162,12 +162,26 @@ def get_category_expenses(operations):
     categories = {}
 
     for operation in operations:
-        operation_type, amount, category = parse_operation(operation)
-
-        if operation_type != "Расход":
+        if "|" not in operation:
             continue
 
-        if category:
+        parts = [part.strip() for part in operation.split("|")]
+
+        if len(parts) < 2:
+            continue
+
+        operation_data = parts[1]
+
+        if not operation_data.startswith("Расход:"):
+            continue
+
+        amount = float(
+            operation_data.split("-")[1].split(" тенге")[0]
+        )
+
+        if len(parts) > 2 and parts[2].startswith("Категория:"):
+            category = parts[2].replace("Категория:", "").strip()
+
             if category not in categories:
                 categories[category] = 0
 
@@ -210,7 +224,6 @@ def calculate_balance(operations):
 
     return balance
 
-
 def edit_operation(operations):
     print("\n--- РЕДАКТИРОВАНИЕ ОПЕРАЦИИ ---")
 
@@ -230,41 +243,40 @@ def edit_operation(operations):
 
         old_operation = operations[choice - 1]
 
-        print(f"\nТекущая операция:")
+        print("\nТекущая операция:")
         print(format_operation(old_operation))
 
         new_amount = get_amount("Введите новую сумму: ")
 
-        if new_amount <= 0:
-            print("Ошибка: сумма должна быть больше 0.")
-            return
+        parts = [part.strip() for part in old_operation.split("|")]
 
-        if "|" in old_operation:
-            parts = old_operation.split("|")
-
-            operation_data = parts[1].strip()
+        if len(parts) > 1:
+            date = parts[0]
+            operation_data = parts[1]
 
             if operation_data.startswith("Доход:"):
-                parts[1] = f" Доход: +{new_amount} тенге"
+                operations[choice - 1] = (
+                    f"{date} | Доход: +{format_money(new_amount)} тенге"
+                )
 
             elif operation_data.startswith("Расход:"):
-                parts[1] = f" Расход: -{new_amount} тенге"
-
                 category = choose_category()
 
-                if len(parts) > 2 and parts[2].strip().startswith("Категория:"):
-                    parts[2] = f" Категория: {category}"
-                else:
-                    parts.append(f" Категория: {category}")
-
-            operations[choice - 1] = "|".join(parts)
+                operations[choice - 1] = (
+                    f"{date} | Расход: -{format_money(new_amount)} тенге"
+                    f" | Категория: {category}"
+                )
 
         else:
             if old_operation.startswith("Доход:"):
-                operations[choice - 1] = f"Доход: +{new_amount} тенге"
+                operations[choice - 1] = (
+                    f"Доход: +{format_money(new_amount)} тенге"
+                )
 
             elif old_operation.startswith("Расход:"):
-                operations[choice - 1] = f"Расход: -{new_amount} тенге"
+                operations[choice - 1] = (
+                    f"Расход: -{format_money(new_amount)} тенге"
+                )
 
         save_operations(operations)
 
