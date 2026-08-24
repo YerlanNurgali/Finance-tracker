@@ -4,6 +4,34 @@ from storage import load_operations, save_operation, save_operations
 
 operations, balance = load_operations()
 
+def parse_operation(operation):
+    operation_type = None
+    amount = 0
+    category = ""
+
+    if "|" in operation:
+        parts = [part.strip() for part in operation.split("|")]
+        operation_data = parts[1]
+
+        if len(parts) > 2 and parts[2].startswith("Категория:"):
+            category = parts[2].replace("Категория:", "").strip()
+    else:
+        operation_data = operation
+
+    if operation_data.startswith("Доход:"):
+        operation_type = "Доход"
+        amount = float(
+            operation_data.split("+")[1].split(" тенге")[0]
+        )
+
+    elif operation_data.startswith("Расход:"):
+        operation_type = "Расход"
+        amount = float(
+            operation_data.split("-")[1].split(" тенге")[0]
+        )
+
+    return operation_type, amount, category
+
 def get_amount(message):
     while True:
         try:
@@ -133,35 +161,19 @@ def show_statistics(operations):
     categories = {}
 
     for operation in operations:
-        if "|" in operation:
-            parts = [part.strip() for part in operation.split("|")]
+        operation_type, amount, category = parse_operation(operation)
 
-            operation_data = parts[1]
+        if operation_type == "Доход":
+            total_income += amount
 
-            if operation_data.startswith("Доход:"):
-                amount = float(operation_data.split("+")[1].split(" тенге")[0])
-                total_income += amount
+        elif operation_type == "Расход":
+            total_expense += amount
 
-            elif operation_data.startswith("Расход:"):
-                amount = float(operation_data.split("-")[1].split(" тенге")[0])
-                total_expense += amount
+            if category:
+                if category not in categories:
+                    categories[category] = 0
 
-                if len(parts) > 2 and parts[2].startswith("Категория:"):
-                    category = parts[2].replace("Категория:", "").strip()
-
-                    if category not in categories:
-                        categories[category] = 0
-
-                    categories[category] += amount
-
-        else:
-            if operation.startswith("Доход:"):
-                amount = float(operation.split("+")[1].split(" тенге")[0])
-                total_income += amount
-
-            elif operation.startswith("Расход:"):
-                amount = float(operation.split("-")[1].split(" тенге")[0])
-                total_expense += amount
+                categories[category] += amount
 
     print("\n--- СТАТИСТИКА ---")
     print(f"Всего доходов: {format_money(total_income)} тенге")
@@ -186,30 +198,18 @@ def show_statistics(operations):
             print(
                 f"{category}: {format_money(amount)} тенге "
                 f"({percentage:.1f}%)"
-        )
+            )
 
 def get_category_expenses(operations):
     categories = {}
 
     for operation in operations:
-        if "|" not in operation:
+        operation_type, amount, category = parse_operation(operation)
+
+        if operation_type != "Расход":
             continue
 
-        parts = [part.strip() for part in operation.split("|")]
-
-        if len(parts) < 2:
-            continue
-
-        operation_data = parts[1]
-
-        if not operation_data.startswith("Расход:"):
-            continue
-
-        amount = float(operation_data.split("-")[1].split(" тенге")[0])
-
-        if len(parts) > 2 and parts[2].startswith("Категория:"):
-            category = parts[2].replace("Категория:", "").strip()
-
+        if category:
             if category not in categories:
                 categories[category] = 0
 
@@ -242,24 +242,16 @@ def calculate_balance(operations):
     balance = 0
 
     for operation in operations:
-        if "|" in operation:
-            operation_data = operation.split("|", 1)[1].strip()
-        else:
-            operation_data = operation
+        operation_type, amount, category = parse_operation(operation)
 
-        if operation_data.startswith("Доход:"):
-            amount = float(
-                operation_data.split("+")[1].split(" тенге")[0]
-            )
+        if operation_type == "Доход":
             balance += amount
 
-        elif operation_data.startswith("Расход:"):
-            amount = float(
-                operation_data.split("-")[1].split(" тенге")[0]
-            )
+        elif operation_type == "Расход":
             balance -= amount
 
     return balance
+
 
 def edit_operation(operations):
     print("\n--- РЕДАКТИРОВАНИЕ ОПЕРАЦИИ ---")
