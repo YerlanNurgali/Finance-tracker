@@ -33,12 +33,12 @@
 ```text
 finance_tracker/
 ├── main.py
+├── finance.py
+├── operations.py
+├── storage.py
 ├── utils.py
 ├── requirements.txt
-├── operations.txt
 ├── tests/
-│   └── test_finance_tracker.py
-├── .gitignore
 └── README.md
 ```
 
