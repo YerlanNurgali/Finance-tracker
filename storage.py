@@ -96,6 +96,8 @@ def delete_operation_from_database(operation):
         if db_operation == operation:
             delete_operation(operation_id)
             return
+def delete_operation_by_id(operation_id):
+    delete_operation(operation_id)
 
 def update_operation_in_database(operation, new_amount, category=None):
     rows = get_operations()

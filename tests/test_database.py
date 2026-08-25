@@ -196,3 +196,35 @@ def test_income_can_be_without_category(tmp_path, monkeypatch):
     assert operations[0][2] == "Доход"
     assert operations[0][3] == 5000
     assert operations[0][4] is None
+
+def test_delete_operation_by_id(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+
+    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+
+    database.create_database()
+
+    database.add_operation(
+        "25.08.2026 20:00",
+        "Доход",
+        5000
+    )
+
+    database.add_operation(
+        "25.08.2026 20:01",
+        "Расход",
+        1500,
+        "Еда"
+    )
+
+    operations = database.get_operations()
+
+    first_id = operations[0][0]
+    second_id = operations[1][0]
+
+    database.delete_operation(second_id)
+
+    result = database.get_operations()
+
+    assert len(result) == 1
+    assert result[0][0] == first_id

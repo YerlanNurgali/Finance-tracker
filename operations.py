@@ -3,8 +3,11 @@ from datetime import datetime
 from storage import (
     save_operation_to_database,
     delete_operation_from_database,
+    delete_operation_by_id,
     update_operation_in_database
 )
+
+from database import get_operations
 
 from utils import get_amount, format_money
 
@@ -147,9 +150,19 @@ def delete_operation(operations):
             print("Ошибка: такой операции нет.")
             return
 
-        deleted_operation = operations.pop(choice - 1)
+        deleted_operation = operations[choice - 1]
 
-        delete_operation_from_database(deleted_operation)
+        rows = get_operations()
+
+        if choice > len(rows):
+            print("Ошибка: операция не найдена в базе данных.")
+            return
+
+        operation_id = rows[choice - 1][0]
+
+        delete_operation_by_id(operation_id)
+
+        operations.pop(choice - 1)
 
         print(f"Операция удалена: {deleted_operation}")
 
