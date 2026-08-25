@@ -1,9 +1,6 @@
 from datetime import datetime
 
 from storage import (
-    load_operations,
-    save_operation,
-    save_operations,
     save_operation_to_database,
     delete_operation_from_database,
     update_operation_in_database
@@ -47,9 +44,7 @@ def add_income(balance, operations):
     operation = f"{date} | Доход: +{income} тенге"
 
     operations.append(operation)
-    save_operation(operation)
     save_operation_to_database(operation)
-
     print("Доход добавлен!")
 
     return balance
@@ -73,9 +68,7 @@ def add_expense(balance, operations):
     )
 
     operations.append(operation)
-    save_operation(operation)
     save_operation_to_database(operation)
-
     print("Расход добавлен!")
 
     return balance
@@ -131,7 +124,6 @@ def edit_operation(operations):
             category
         )
 
-        save_operations(operations)
 
         print("Операция изменена!")
 
@@ -158,8 +150,6 @@ def delete_operation(operations):
         deleted_operation = operations.pop(choice - 1)
 
         delete_operation_from_database(deleted_operation)
-
-        save_operations(operations)
 
         print(f"Операция удалена: {deleted_operation}")
 

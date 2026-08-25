@@ -17,11 +17,7 @@ from finance import (
     show_category_chart,
 )
 
-from storage import (
-    load_operations_from_database,
-    save_operation,
-    save_operations
-)
+from storage import load_operations_from_database
 
 operations, balance = load_operations_from_database()
 
