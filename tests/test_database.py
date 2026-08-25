@@ -120,3 +120,79 @@ def test_add_expense_with_category(tmp_path, monkeypatch):
     assert operations[0][2] == "Расход"
     assert operations[0][3] == 3500
     assert operations[0][4] == "Развлечения"
+
+def test_add_operation_rejects_negative_amount(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+
+    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+
+    database.create_database()
+
+    try:
+        database.add_operation(
+            "25.08.2026 20:00",
+            "Доход",
+            -5000
+        )
+    except ValueError:
+        pass
+    else:
+        assert False, "Отрицательная сумма должна вызывать ValueError"
+
+def test_add_operation_rejects_invalid_type(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+
+    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+
+    database.create_database()
+
+    try:
+        database.add_operation(
+            "25.08.2026 20:00",
+            "Что-то",
+            5000
+        )
+    except ValueError:
+        pass
+    else:
+        assert False, "Недопустимый тип операции должен вызывать ValueError"
+
+
+def test_expense_requires_category(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+
+    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+
+    database.create_database()
+
+    try:
+        database.add_operation(
+            "25.08.2026 20:00",
+            "Расход",
+            2000
+        )
+    except ValueError:
+        pass
+    else:
+        assert False, "Для расхода категория обязательна"
+
+
+def test_income_can_be_without_category(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+
+    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+
+    database.create_database()
+
+    database.add_operation(
+        "25.08.2026 20:00",
+        "Доход",
+        5000
+    )
+
+    operations = database.get_operations()
+
+    assert len(operations) == 1
+    assert operations[0][2] == "Доход"
+    assert operations[0][3] == 5000
+    assert operations[0][4] is None

@@ -27,6 +27,15 @@ def create_database():
 
 
 def add_operation(date, operation_type, amount, category=None):
+    if amount <= 0:
+        raise ValueError("Сумма должна быть больше нуля")
+
+    if operation_type not in ("Доход", "Расход"):
+        raise ValueError("Недопустимый тип операции")
+
+    if operation_type == "Расход" and not category:
+        raise ValueError("Для расхода нужна категория")
+
     with get_connection() as connection:
         cursor = connection.cursor()
 
