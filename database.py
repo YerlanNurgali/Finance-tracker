@@ -27,62 +27,58 @@ def create_database():
 
 
 def add_operation(date, operation_type, amount, category=None):
-    connection = get_connection()
-    cursor = connection.cursor()
+    with get_connection() as connection:
+        cursor = connection.cursor()
 
-    cursor.execute(
-        """
-        INSERT INTO operations (date, operation_type, amount, category)
-        VALUES (?, ?, ?, ?)
-        """,
-        (date, operation_type, amount, category)
-    )
+        cursor.execute(
+            """
+            INSERT INTO operations (date, operation_type, amount, category)
+            VALUES (?, ?, ?, ?)
+            """,
+            (date, operation_type, amount, category)
+        )
 
-    connection.commit()
-    connection.close()
 
 def get_operations():
-    connection = get_connection()
-    cursor = connection.cursor()
+    with get_connection() as connection:
+        cursor = connection.cursor()
 
-    cursor.execute(
-        """
-        SELECT id, date, operation_type, amount, category
-        FROM operations
-        ORDER BY id
-        """
-    )
+        cursor.execute(
+            """
+            SELECT id, date, operation_type, amount, category
+            FROM operations
+            ORDER BY id
+            """
+        )
 
-    operations = cursor.fetchall()
-
-    connection.close()
+        operations = cursor.fetchall()
 
     return operations
 
 def delete_operation(operation_id):
-    connection = get_connection()
-    cursor = connection.cursor()
+    with get_connection() as connection:
+        cursor = connection.cursor()
 
-    cursor.execute(
-        "DELETE FROM operations WHERE id = ?",
-        (operation_id,)
-    )
+        cursor.execute(
+            "DELETE FROM operations WHERE id = ?",
+            (operation_id,)
+        )
 
     connection.commit()
     connection.close()
 
 def update_operation(operation_id, date, operation_type, amount, category=None):
-    connection = get_connection()
-    cursor = connection.cursor()
+    with get_connection() as connection:
+        cursor = connection.cursor()
 
-    cursor.execute(
-        """
-        UPDATE operations
-        SET date = ?, operation_type = ?, amount = ?, category = ?
-        WHERE id = ?
-        """,
-        (date, operation_type, amount, category, operation_id)
-    )
+        cursor.execute(
+            """
+            UPDATE operations
+            SET date = ?, operation_type = ?, amount = ?, category = ?
+            WHERE id = ?
+            """,
+            (date, operation_type, amount, category, operation_id)
+        )
 
     connection.commit()
     connection.close()
