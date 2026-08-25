@@ -1,6 +1,13 @@
 from datetime import datetime
 
-from storage import save_operation, save_operations
+from storage import (
+    load_operations,
+    save_operation,
+    save_operations,
+    save_operation_to_database,
+    delete_operation_from_database,
+    update_operation_in_database
+)
 
 from utils import get_amount, format_money
 
@@ -41,6 +48,7 @@ def add_income(balance, operations):
 
     operations.append(operation)
     save_operation(operation)
+    save_operation_to_database(operation)
 
     print("Доход добавлен!")
 
@@ -66,6 +74,7 @@ def add_expense(balance, operations):
 
     operations.append(operation)
     save_operation(operation)
+    save_operation_to_database(operation)
 
     print("Расход добавлен!")
 
@@ -97,6 +106,8 @@ def edit_operation(operations):
 
         parts = [part.strip() for part in old_operation.split("|")]
 
+        category = None
+
         if len(parts) > 1:
             date = parts[0]
             operation_data = parts[1]
@@ -113,6 +124,12 @@ def edit_operation(operations):
                     f"{date} | Расход: -{format_money(new_amount)} тенге"
                     f" | Категория: {category}"
                 )
+
+        update_operation_in_database(
+            old_operation,
+            new_amount,
+            category
+        )
 
         save_operations(operations)
 
@@ -139,6 +156,8 @@ def delete_operation(operations):
             return
 
         deleted_operation = operations.pop(choice - 1)
+
+        delete_operation_from_database(deleted_operation)
 
         save_operations(operations)
 

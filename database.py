@@ -24,3 +24,65 @@ def create_database():
 
     connection.commit()
     connection.close()
+
+
+def add_operation(date, operation_type, amount, category=None):
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO operations (date, operation_type, amount, category)
+        VALUES (?, ?, ?, ?)
+        """,
+        (date, operation_type, amount, category)
+    )
+
+    connection.commit()
+    connection.close()
+
+def get_operations():
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT id, date, operation_type, amount, category
+        FROM operations
+        ORDER BY id
+        """
+    )
+
+    operations = cursor.fetchall()
+
+    connection.close()
+
+    return operations
+
+def delete_operation(operation_id):
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        "DELETE FROM operations WHERE id = ?",
+        (operation_id,)
+    )
+
+    connection.commit()
+    connection.close()
+
+def update_operation(operation_id, date, operation_type, amount, category=None):
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        UPDATE operations
+        SET date = ?, operation_type = ?, amount = ?, category = ?
+        WHERE id = ?
+        """,
+        (date, operation_type, amount, category, operation_id)
+    )
+
+    connection.commit()
+    connection.close()

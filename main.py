@@ -17,9 +17,13 @@ from finance import (
     show_category_chart,
 )
 
-from storage import load_operations, save_operation, save_operations
+from storage import (
+    load_operations_from_database,
+    save_operation,
+    save_operations
+)
 
-operations, balance = load_operations()
+operations, balance = load_operations_from_database()
 
 
 def show_balance(balance):
@@ -74,7 +78,7 @@ def show_history(operations):
             print(f"{number}. {format_operation(operation)}")
 
 def main():
-    operations, balance = load_operations()
+    operations, balance = load_operations_from_database()
 
     while True:
         print("1. Добавить доход")
