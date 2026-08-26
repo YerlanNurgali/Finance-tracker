@@ -6,9 +6,6 @@ from database import (
 )
 
 
-from database import get_operations
-
-
 def load_operations_from_database():
     rows = get_operations()
 
@@ -77,25 +74,7 @@ def save_operation_to_database(operation):
 
 
 
-def delete_operation_from_database(operation):
-    rows = get_operations()
 
-    for operation_id, date, operation_type, amount, category in rows:
-        if operation_type == "Доход":
-            db_operation = f"{date} | Доход: +{amount:g} тенге"
-
-        elif operation_type == "Расход":
-            db_operation = f"{date} | Расход: -{amount:g} тенге"
-
-            if category:
-                db_operation += f" | Категория: {category}"
-
-        else:
-            continue
-
-        if db_operation == operation:
-            delete_operation(operation_id)
-            return
 def delete_operation_by_id(operation_id):
     delete_operation(operation_id)
 
