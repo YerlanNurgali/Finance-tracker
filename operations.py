@@ -2,7 +2,6 @@ from datetime import datetime
 
 from storage import (
     save_operation_to_database,
-    delete_operation_from_database,
     delete_operation_by_id,
     update_operation_by_id
 )
