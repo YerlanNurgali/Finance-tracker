@@ -4,7 +4,7 @@ from storage import (
     save_operation_to_database,
     delete_operation_from_database,
     delete_operation_by_id,
-    update_operation_in_database
+    update_operation_by_id
 )
 
 from database import get_operations
@@ -95,6 +95,14 @@ def edit_operation(operations):
 
         old_operation = operations[choice - 1]
 
+        rows = get_operations()
+
+        if choice > len(rows):
+            print("Ошибка: операция не найдена в базе данных.")
+            return
+
+        operation_id = rows[choice - 1][0]
+
         print("\nТекущая операция:")
         print(old_operation)
 
@@ -121,8 +129,10 @@ def edit_operation(operations):
                     f" | Категория: {category}"
                 )
 
-        update_operation_in_database(
-            old_operation,
+        update_operation_by_id(
+            operation_id,
+            date,
+            "Доход" if operation_data.startswith("Доход:") else "Расход",
             new_amount,
             category
         )

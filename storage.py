@@ -99,28 +99,12 @@ def delete_operation_from_database(operation):
 def delete_operation_by_id(operation_id):
     delete_operation(operation_id)
 
-def update_operation_in_database(operation, new_amount, category=None):
-    rows = get_operations()
 
-    for operation_id, date, operation_type, amount, old_category in rows:
-        if operation_type == "Доход":
-            db_operation = f"{date} | Доход: +{amount:g} тенге"
-
-        elif operation_type == "Расход":
-            db_operation = f"{date} | Расход: -{amount:g} тенге"
-
-            if old_category:
-                db_operation += f" | Категория: {old_category}"
-
-        else:
-            continue
-
-        if db_operation == operation:
-            update_operation(
-                operation_id,
-                date,
-                operation_type,
-                new_amount,
-                category if operation_type == "Расход" else None
-            )
-            return
+def update_operation_by_id(operation_id, date, operation_type, amount, category=None):
+    update_operation(
+        operation_id,
+        date,
+        operation_type,
+        amount,
+        category
+    )
