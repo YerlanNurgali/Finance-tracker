@@ -60,12 +60,9 @@ def test_edit_operation():
         "24.08.2026 00:42 | Расход: -1500 тенге | Категория: Транспорт"
     ]
 
-    fake_rows = [
-        (1, "24.08.2026 00:42", "Расход", 1500.0, "Транспорт")
-    ]
 
     with patch("builtins.input", side_effect=["1", "2000", "4"]), \
-         patch("operations.get_operations", return_value=fake_rows), \
+         patch("operations.get_operation_id_by_position", return_value=1), \
          patch("operations.update_operation_by_id") as mock_update:
 
         edit_operation(operations)
@@ -89,14 +86,9 @@ def test_delete_operation():
         "Доход: +5000 тенге",
     ]
 
-    fake_rows = [
-        (10, "26.08.2026 10:00", "Доход", 10000.0, None),
-        (11, "26.08.2026 11:00", "Расход", 2000.0, "Еда"),
-        (12, "26.08.2026 12:00", "Доход", 5000.0, None),
-    ]
 
     with patch("builtins.input", return_value="2"), \
-         patch("operations.get_operations", return_value=fake_rows), \
+         patch("operations.get_operation_id_by_position", return_value=11), \
          patch("operations.delete_operation_by_id") as mock_delete:
 
         delete_operation(operations)

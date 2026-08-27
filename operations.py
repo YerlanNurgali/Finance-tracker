@@ -3,10 +3,10 @@ from datetime import datetime
 from storage import (
     save_operation_to_database,
     delete_operation_by_id,
-    update_operation_by_id
+    update_operation_by_id,
+    get_operation_id_by_position
 )
 
-from database import get_operations
 
 from utils import get_amount, format_money
 
@@ -78,7 +78,7 @@ def add_expense(balance, operations):
 def edit_operation(operations):
     print("\n--- РЕДАКТИРОВАНИЕ ОПЕРАЦИИ ---")
 
-    if len(operations) == 0:
+    if not operations:
         print("Операций пока нет.")
         return
 
@@ -94,13 +94,11 @@ def edit_operation(operations):
 
         old_operation = operations[choice - 1]
 
-        rows = get_operations()
+        operation_id = get_operation_id_by_position(choice - 1)
 
-        if choice > len(rows):
+        if operation_id is None:
             print("Ошибка: операция не найдена в базе данных.")
             return
-
-        operation_id = rows[choice - 1][0]
 
         print("\nТекущая операция:")
         print(old_operation)
@@ -161,13 +159,11 @@ def delete_operation(operations):
 
         deleted_operation = operations[choice - 1]
 
-        rows = get_operations()
+        operation_id = get_operation_id_by_position(choice - 1)
 
-        if choice > len(rows):
+        if operation_id is None:
             print("Ошибка: операция не найдена в базе данных.")
             return
-
-        operation_id = rows[choice - 1][0]
 
         delete_operation_by_id(operation_id)
 

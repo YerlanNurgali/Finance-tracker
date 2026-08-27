@@ -136,3 +136,36 @@ def test_update_operation_by_id_from_storage(tmp_path, monkeypatch):
     assert result[0][2] == "Расход"
     assert result[0][3] == 3000
     assert result[0][4] == "Еда"
+
+from storage import get_operation_id_by_position
+
+
+def test_get_operation_id_by_position(tmp_path, monkeypatch):
+    db_path = tmp_path / "test.db"
+
+    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+
+    database.create_database()
+
+    database.add_operation(
+        "26.08.2026 10:00",
+        "Доход",
+        10000
+    )
+
+    database.add_operation(
+        "26.08.2026 11:00",
+        "Расход",
+        2000,
+        "Еда"
+    )
+
+    operations = database.get_operations()
+
+    first_id = operations[0][0]
+    second_id = operations[1][0]
+
+    assert get_operation_id_by_position(0) == first_id
+    assert get_operation_id_by_position(1) == second_id
+    assert get_operation_id_by_position(2) is None
+    assert get_operation_id_by_position(-1) is None

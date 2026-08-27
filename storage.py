@@ -87,3 +87,11 @@ def update_operation_by_id(operation_id, date, operation_type, amount, category=
         amount,
         category
     )
+
+def get_operation_id_by_position(position):
+    rows = get_operations()
+
+    if position < 0 or position >= len(rows):
+        return None
+
+    return rows[position][0]
