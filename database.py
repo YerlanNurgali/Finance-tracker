@@ -73,8 +73,6 @@ def delete_operation(operation_id):
             (operation_id,)
         )
 
-    connection.commit()
-    connection.close()
 
 def update_operation(operation_id, date, operation_type, amount, category=None):
     with get_connection() as connection:
@@ -89,5 +87,3 @@ def update_operation(operation_id, date, operation_type, amount, category=None):
             (date, operation_type, amount, category, operation_id)
         )
 
-    connection.commit()
-    connection.close()
