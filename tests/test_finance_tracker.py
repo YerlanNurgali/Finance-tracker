@@ -3,7 +3,7 @@ from main import edit_operation
 from main import add_income, add_expense
 from unittest.mock import patch
 from operations import add_income, add_expense, delete_operation
-
+from operations import choose_category
 
 def test_income():
     operation = "Доход: +15000 тенге"
@@ -60,16 +60,27 @@ def test_edit_operation():
         "24.08.2026 00:42 | Расход: -1500 тенге | Категория: Транспорт"
     ]
 
-    with patch("builtins.input", side_effect=["1", "2000", "4"]):
+    fake_rows = [
+        (1, "24.08.2026 00:42", "Расход", 1500.0, "Транспорт")
+    ]
+
+    with patch("builtins.input", side_effect=["1", "2000", "4"]), \
+         patch("operations.get_operations", return_value=fake_rows), \
+         patch("operations.update_operation_by_id") as mock_update:
+
         edit_operation(operations)
 
     assert operations[0] == (
         "24.08.2026 00:42 | Расход: -2 000 тенге | Категория: Развлечения"
     )
 
-from unittest.mock import patch
-from main import delete_operation
-
+    mock_update.assert_called_once_with(
+        1,
+        "24.08.2026 00:42",
+        "Расход",
+        2000,
+        "Развлечения"
+    )
 
 def test_delete_operation():
     operations = [
@@ -78,13 +89,24 @@ def test_delete_operation():
         "Доход: +5000 тенге",
     ]
 
-    with patch("builtins.input", return_value="2"):
+    fake_rows = [
+        (10, "26.08.2026 10:00", "Доход", 10000.0, None),
+        (11, "26.08.2026 11:00", "Расход", 2000.0, "Еда"),
+        (12, "26.08.2026 12:00", "Доход", 5000.0, None),
+    ]
+
+    with patch("builtins.input", return_value="2"), \
+         patch("operations.get_operations", return_value=fake_rows), \
+         patch("operations.delete_operation_by_id") as mock_delete:
+
         delete_operation(operations)
 
     assert operations == [
         "Доход: +10000 тенге",
         "Доход: +5000 тенге",
     ]
+
+    mock_delete.assert_called_once_with(11)
 
 def test_parse_operation_with_formatted_amount():
     operation = (
@@ -103,19 +125,24 @@ def test_add_income():
     operations = []
     balance = 0
 
-    with patch("builtins.input", side_effect=["5000"]):
+    with patch("builtins.input", side_effect=["5000"]), \
+         patch("operations.save_operation_to_database") as mock_save:
+
         new_balance = add_income(balance, operations)
 
     assert new_balance == 5000
     assert len(operations) == 1
     assert "Доход: +5000" in operations[0]
 
+    mock_save.assert_called_once_with(operations[0])
 
 def test_add_expense():
     operations = []
     balance = 5000
 
-    with patch("builtins.input", side_effect=["1500", "1"]):
+    with patch("builtins.input", side_effect=["1500", "1"]), \
+         patch("operations.save_operation_to_database") as mock_save:
+
         new_balance = add_expense(balance, operations)
 
     assert new_balance == 3500
@@ -123,6 +150,7 @@ def test_add_expense():
     assert "Расход: -1500" in operations[0]
     assert "Категория: Еда" in operations[0]
 
+    mock_save.assert_called_once_with(operations[0])
 
 def test_expense_more_than_balance():
     operations = []
@@ -133,5 +161,17 @@ def test_expense_more_than_balance():
 
     assert new_balance == 1000
     assert len(operations) == 0
+
+def test_choose_category():
+    with patch("builtins.input", return_value="1"):
+        result = choose_category()
+
+    assert result == "Еда"
+
+def test_choose_category_rejects_invalid_choice():
+    with patch("builtins.input", side_effect=["9", "2"]):
+        result = choose_category()
+
+    assert result == "Транспорт"
 
 print("Все тесты пройдены!")
