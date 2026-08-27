@@ -1,4 +1,3 @@
-from datetime import datetime
 
 from operations import (
     add_income,
@@ -8,7 +7,7 @@ from operations import (
     delete_operation,
 )
 
-from utils import format_money, parse_operation, get_amount
+from utils import format_money, parse_operation
 
 from finance import (
     calculate_balance,
