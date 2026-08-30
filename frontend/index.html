@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Finance Tracker</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <header class="header">
+            <h1>Finance Tracker</h1>
+            <p>Управляй своими финансами</p>
+        </header>
+
+        <section class="balance-card">
+            <p class="balance-label">Текущий баланс</p>
+            <h2 id="balance">0 ₸</h2>
+        </section>
+
+        <section class="summary">
+
+            <div class="summary-card income">
+                <p>Доходы</p>
+                <h3 id="total-income">0 ₸</h3>
+            </div>
+
+            <div class="summary-card expense">
+                <p>Расходы</p>
+                <h3 id="total-expense">0 ₸</h3>
+            </div>
+
+        </section>
+
+        <section class="categories-section">
+
+            <div class="section-header">
+                <h2>Расходы по категориям</h2>
+            </div>
+        
+            <div id="categories-list">
+                <p class="empty-message">
+                    Загрузка категорий...
+                </p>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="expenses-chart"></canvas>
+            </div>
+        
+        </section>
+
+        <section class="operations-section">
+
+            <div class="section-header">
+                <h2>История операций</h2>
+
+                <button id="add-operation-btn">
+                    + Добавить
+                </button>
+            </div>
+            
+            <div id="operation-form" class="operation-form hidden">
+
+    <h3 id="operation-form-title">Новая операция</h3>
+
+    <label for="operation-type">
+        Тип операции
+    </label>
+
+    <select id="operation-type">
+        <option value="Доход">Доход</option>
+        <option value="Расход">Расход</option>
+    </select>
+
+
+    <label for="operation-amount">
+        Сумма
+    </label>
+
+    <input
+        type="number"
+        id="operation-amount"
+        placeholder="Введите сумму"
+        min="1"
+        step="0.01"
+    >
+
+
+    <div id="category-field">
+
+        <label for="operation-category">
+            Категория
+        </label>
+
+        <select id="operation-category">
+            <option value="Еда">Еда</option>
+            <option value="Транспорт">Транспорт</option>
+            <option value="Дом">Дом</option>
+            <option value="Развлечения">Развлечения</option>
+            <option value="Здоровье">Здоровье</option>
+            <option value="Другое">Другое</option>
+        </select>
+
+    </div>
+
+
+    <div class="form-buttons">
+
+        <button id="save-operation-btn">
+            Сохранить
+        </button>
+
+        <button id="cancel-operation-btn" type="button">
+            Отмена
+        </button>
+
+    </div>
+
+</div>
+
+            <div id="operations-list">
+                <p class="empty-message">
+                    Загрузка операций...
+                </p>
+            </div>
+
+        </section>
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script src="/static/script.js"></script>
+
+</body>
+</html>
