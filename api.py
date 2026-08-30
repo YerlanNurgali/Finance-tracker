@@ -1,5 +1,9 @@
+from pathlib import Path
+
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
 from database import (
@@ -16,11 +20,24 @@ app = FastAPI(
     version="1.0.0",
 )
 
+BASE_DIR = Path(__file__).resolve().parent
+FRONTEND_DIR = BASE_DIR / "frontend"
+
+app.mount(
+    "/static",
+    StaticFiles(directory=FRONTEND_DIR),
+    name="static"
+)
+
 class OperationCreate(BaseModel):
     date: str
     operation_type: str
     amount: float
     category: Optional[str] = None
+
+@app.get("/")
+def serve_frontend():
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 @app.get("/statistics")
 def get_statistics():
