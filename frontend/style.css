@@ -286,3 +286,30 @@ button:hover {
     font-weight: 700;
     color: #dc2626;
 }
+
+.operation-filters {
+    display: flex;
+    gap: 8px;
+    margin: 16px 0;
+}
+
+.filter-btn {
+    background: #f3f4f6;
+    color: #374151;
+    border: 1px solid #d1d5db;
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: 0.2s;
+}
+
+.filter-btn:hover {
+    background: #e5e7eb;
+}
+
+.filter-btn.active {
+    background: #2563eb;
+    color: white;
+    border-color: #2563eb;
+}

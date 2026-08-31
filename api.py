@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
+from datetime import datetime, timedelta
 
 from database import (
     get_operations,
@@ -28,6 +29,50 @@ app.mount(
     StaticFiles(directory=FRONTEND_DIR),
     name="static"
 )
+
+def parse_operation_date(date_string):
+    formats = [
+        "%d.%m.%Y %H:%M",
+        "%d.%m.%Y, %H:%M:%S"
+    ]
+
+    for date_format in formats:
+        try:
+            return datetime.strptime(date_string, date_format)
+        except ValueError:
+            continue
+
+    return None
+
+def filter_operations(rows, period):
+    now = datetime.now()
+
+    if period == "today":
+        start_date = now.replace(
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0
+        )
+
+    elif period == "week":
+        start_date = now - timedelta(days=7)
+
+    elif period == "month":
+        start_date = now - timedelta(days=30)
+
+    else:
+        return rows
+
+    filtered = []
+
+    for row in rows:
+        operation_date = parse_operation_date(row[1])
+
+        if operation_date and operation_date >= start_date:
+            filtered.append(row)
+
+    return filtered
 
 class OperationCreate(BaseModel):
     date: str
@@ -82,8 +127,10 @@ def get_statistics():
     }
 
 @app.get("/operations")
-def get_all_operations():
+def get_all_operations(period: str = "all"):
     rows = get_operations()
+
+    rows = filter_operations(rows, period)
 
     operations = []
 

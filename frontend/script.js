@@ -1,6 +1,7 @@
 const API_URL = "http://127.0.0.1:8000";
 
 let editingOperationId = null;
+let currentPeriod = "all";
 
 const saveOperationBtn =
     document.getElementById("save-operation-btn");
@@ -80,7 +81,9 @@ async function loadStatistics() {
 
 async function loadOperations() {
 
-    const response = await fetch(`${API_URL}/operations`);
+    const response = await fetch(
+        `${API_URL}/operations?period=${currentPeriod}`
+    );
 
     if (!response.ok) {
         throw new Error("Не удалось загрузить операции");
@@ -384,6 +387,26 @@ document.addEventListener("DOMContentLoaded", () => {
             alert("Ошибка при добавлении операции");
         }
     });
+
+    const filterButtons =
+    document.querySelectorAll(".filter-btn");
+
+filterButtons.forEach(button => {
+
+    button.addEventListener("click", async () => {
+
+        currentPeriod = button.dataset.period;
+
+        filterButtons.forEach(btn => {
+            btn.classList.remove("active");
+        });
+
+        button.classList.add("active");
+
+        await loadOperations();
+    });
+
+});
 
 });
 
