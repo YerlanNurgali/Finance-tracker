@@ -159,20 +159,144 @@ button:hover {
 
 @media (max-width: 600px) {
 
-    .container {
-        padding: 20px 15px;
+    body {
+        font-size: 15px;
     }
 
-    .summary {
-        grid-template-columns: 1fr;
+    .container {
+        width: 100%;
+        padding: 16px 12px 30px;
+    }
+
+    .header {
+        margin-bottom: 20px;
+    }
+
+    .header h1 {
+        font-size: 26px;
+    }
+
+    .header p {
+        font-size: 14px;
+    }
+
+    .balance-card {
+        padding: 22px 18px;
+        border-radius: 14px;
+        margin-bottom: 14px;
+    }
+
+    .balance-label {
+        font-size: 14px;
     }
 
     .balance-card h2 {
-        font-size: 32px;
+        font-size: 30px;
+    }
+
+    .summary {
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+
+    .summary-card {
+        padding: 16px 12px;
+        border-radius: 14px;
+    }
+
+    .summary-card p {
+        font-size: 13px;
+        margin-bottom: 7px;
+    }
+
+    .summary-card h3 {
+        font-size: 19px;
+    }
+
+    .categories-section,
+    .operations-section {
+        padding: 16px;
+        border-radius: 14px;
+        margin-bottom: 16px;
+    }
+
+    .section-header {
+        gap: 10px;
+        margin-bottom: 15px;
+    }
+
+    .section-header h2 {
+        font-size: 19px;
+    }
+
+    #add-operation-btn {
+        padding: 10px 12px;
+        white-space: nowrap;
+    }
+
+    .operation-filters {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        margin-bottom: 15px;
+    }
+
+    .filter-btn {
+        padding: 9px 4px;
+        font-size: 13px;
     }
 
     .operation {
-        gap: 15px;
+        gap: 10px;
+        padding: 14px 0;
+    }
+
+    .operation-date {
+        font-size: 12px;
+    }
+
+    .operation-category {
+        font-size: 12px;
+    }
+
+    .operation-amount {
+        font-size: 14px;
+        white-space: nowrap;
+    }
+
+    .operation-actions {
+        gap: 4px;
+    }
+
+    .edit-operation-btn,
+    .delete-operation-btn {
+        padding: 6px;
+        font-size: 15px;
+    }
+
+    .operation-form {
+        padding: 15px;
+        margin-bottom: 18px;
+    }
+
+    .operation-form input,
+    .operation-form select {
+        padding: 13px 12px;
+        font-size: 16px;
+    }
+
+    .form-buttons {
+        gap: 8px;
+    }
+
+    .form-buttons button {
+        padding: 12px;
+    }
+
+    .chart-container {
+        max-width: 100%;
+        overflow: hidden;
     }
 }
 

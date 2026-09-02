@@ -3,6 +3,25 @@ const API_URL = "http://127.0.0.1:8000";
 let editingOperationId = null;
 let currentPeriod = "all";
 
+const LOCAL_DATA_KEY = "finance_tracker_data";
+
+function saveLocalData(data) {
+    localStorage.setItem(
+        LOCAL_DATA_KEY,
+        JSON.stringify(data)
+    );
+}
+
+function getLocalData() {
+    const data = localStorage.getItem(LOCAL_DATA_KEY);
+
+    if (!data) {
+        return null;
+    }
+
+    return JSON.parse(data);
+}
+
 const saveOperationBtn =
     document.getElementById("save-operation-btn");
 
@@ -185,26 +204,198 @@ function formatMoney(amount) {
     return new Intl.NumberFormat("ru-RU").format(amount) + " ₸";
 }
 
+async function loadDashboardFromData(data) {
+
+    document.getElementById("balance").textContent =
+        formatMoney(data.balance);
+
+    document.getElementById("total-income").textContent =
+        formatMoney(data.total_income);
+
+    document.getElementById("total-expense").textContent =
+        formatMoney(data.total_expense);
+
+    const categoriesContainer =
+        document.getElementById("categories-list");
+
+    categoriesContainer.innerHTML = "";
+
+    const categories = data.categories || {};
+
+    renderExpensesChart(categories);
+
+    if (Object.keys(categories).length === 0) {
+
+        categoriesContainer.innerHTML = `
+            <p class="empty-message">
+                Расходов по категориям пока нет.
+            </p>
+        `;
+
+    } else {
+
+        Object.entries(categories).forEach(([category, amount]) => {
+
+            const element = document.createElement("div");
+
+            element.className = "category-item";
+
+            element.innerHTML = `
+                <span class="category-name">
+                    ${category}
+                </span>
+
+                <span class="category-amount">
+                    -${formatMoney(amount)}
+                </span>
+            `;
+
+            categoriesContainer.appendChild(element);
+        });
+    }
+
+    const container =
+        document.getElementById("operations-list");
+
+    container.innerHTML = "";
+
+    const operations = data.operations || [];
+
+    if (operations.length === 0) {
+
+        container.innerHTML = `
+            <p class="empty-message">
+                Операций пока нет.
+            </p>
+        `;
+
+        return;
+    }
+
+    operations.forEach(operation => {
+
+        const element = document.createElement("div");
+
+        element.className = "operation";
+
+        const sign =
+            operation.type === "Доход" ? "+" : "-";
+
+        const amountClass =
+            operation.type === "Доход"
+                ? "operation-income"
+                : "operation-expense";
+
+        element.innerHTML = `
+            <div class="operation-info">
+
+                <span class="operation-type">
+                    ${operation.type}
+                </span>
+
+                <span class="operation-date">
+                    ${operation.date}
+                </span>
+
+                ${
+                    operation.category
+                        ? `<span class="operation-category">
+                            Категория: ${operation.category}
+                           </span>`
+                        : ""
+                }
+
+            </div>
+
+            <div class="operation-actions">
+
+                <div class="operation-amount ${amountClass}">
+                    ${sign}${formatMoney(operation.amount)}
+                </div>
+
+                <button class="edit-operation-btn">
+                    ✏️
+                </button>
+
+                <button class="delete-operation-btn">
+                    🗑️
+                </button>
+
+            </div>
+        `;
+
+        const editButton =
+            element.querySelector(".edit-operation-btn");
+
+        editButton.addEventListener("click", () => {
+            editOperation(operation);
+        });
+
+        const deleteButton =
+            element.querySelector(".delete-operation-btn");
+
+        deleteButton.addEventListener("click", () => {
+            deleteOperation(operation.id);
+        });
+
+        container.appendChild(element);
+    });
+}
 
 async function loadDashboard() {
 
     try {
 
-        await Promise.all([
-            loadBalance(),
-            loadStatistics(),
-            loadOperations()
-        ]);
+        const [balanceResponse, statisticsResponse, operationsResponse] =
+            await Promise.all([
+                fetch(`${API_URL}/balance`),
+                fetch(`${API_URL}/statistics`),
+                fetch(`${API_URL}/operations?period=${currentPeriod}`)
+            ]);
+
+        if (
+            !balanceResponse.ok ||
+            !statisticsResponse.ok ||
+            !operationsResponse.ok
+        ) {
+            throw new Error("Не удалось загрузить данные");
+        }
+
+        const balance = await balanceResponse.json();
+        const statistics = await statisticsResponse.json();
+        const operations = await operationsResponse.json();
+
+        const dashboardData = {
+            balance: balance.balance,
+            total_income: statistics.total_income,
+            total_expense: statistics.total_expense,
+            categories: statistics.categories,
+            operations: operations
+        };
+
+        saveLocalData(dashboardData);
+
+        console.log("Данные сохранены локально:", dashboardData);
+
+        await loadDashboardFromData(dashboardData);
 
     } catch (error) {
 
-        console.error(error);
+        console.warn(
+            "API недоступен. Загружаем локальные данные."
+        );
 
-        document.getElementById("operations-list").innerHTML = `
-            <p class="empty-message">
-                Не удалось загрузить данные.
-            </p>
-        `;
+        const localData = getLocalData();
+
+        if (localData) {
+            await loadDashboardFromData(localData);
+        } else {
+            document.getElementById("operations-list").innerHTML = `
+                <p class="empty-message">
+                    Нет сохранённых данных.
+                </p>
+            `;
+        }
     }
 }
 
@@ -447,5 +638,24 @@ function renderExpensesChart(categories) {
                 }
             }
         }
+    });
+}
+
+if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+        navigator.serviceWorker
+            .register("/service-worker.js")
+            .then(registration => {
+                console.log(
+                    "Service Worker зарегистрирован:",
+                    registration.scope
+                );
+            })
+            .catch(error => {
+                console.error(
+                    "Ошибка регистрации Service Worker:",
+                    error
+                );
+            });
     });
 }

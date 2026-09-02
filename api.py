@@ -30,6 +30,13 @@ app.mount(
     name="static"
 )
 
+@app.get("/service-worker.js")
+def service_worker():
+    return FileResponse(
+        FRONTEND_DIR / "service-worker.js",
+        media_type="application/javascript"
+    )
+
 def parse_operation_date(date_string):
     formats = [
         "%d.%m.%Y %H:%M",
