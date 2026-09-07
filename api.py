@@ -11,7 +11,8 @@ from database import (
     get_operations,
     add_operation,
     delete_operation,
-    update_operation
+    update_operation,
+    create_database
 )
 from finance import get_category_expenses
 
@@ -20,6 +21,8 @@ app = FastAPI(
     description="API для управления личными финансами",
     version="1.0.0",
 )
+
+create_database()
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
