@@ -123,6 +123,26 @@ def test_delete_operation():
 
     mock_delete.assert_called_once_with(11)
 
+def test_delete_operation_recalculates_balance():
+    operations = [
+        "24.08.2026 10:00 | Доход: +10000 тенге",
+        "24.08.2026 11:00 | Расход: -3000 тенге | Категория: Еда",
+    ]
+
+    assert calculate_balance(operations) == 7000
+
+    with patch("builtins.input", return_value="2"), \
+         patch("operations.get_operation_id_by_position", return_value=11), \
+         patch("operations.delete_operation_by_id") as mock_delete:
+
+        delete_operation(operations)
+
+    balance = calculate_balance(operations)
+
+    assert balance == 10000
+
+    mock_delete.assert_called_once_with(11)
+
 def test_parse_operation_with_formatted_amount():
     operation = (
         "24.08.2026 12:00 | "
