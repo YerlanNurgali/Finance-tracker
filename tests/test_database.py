@@ -197,7 +197,7 @@ def test_income_can_be_without_category(tmp_path, monkeypatch):
     assert operations[0][3] == 5000
     assert operations[0][4] is None
 
-def test_delete_operation_by_id(tmp_path, monkeypatch):
+def test_delete_first_operation_by_id(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
 
     monkeypatch.setattr(database, "DB_NAME", str(db_path))
