@@ -119,7 +119,35 @@ def edit_operation(operations):
                 )
 
             elif operation_data.startswith("Расход:"):
-                category = choose_category()
+                if len(parts) > 2 and parts[2].startswith("Категория:"):
+                    category = parts[2].replace("Категория:", "").strip()
+
+                print(f"\nТекущая категория: {category}")
+                print("Нажмите Enter, чтобы оставить её.")
+                print("Или выберите новую категорию:")
+                print("1. Еда")
+                print("2. Транспорт")
+                print("3. Дом")
+                print("4. Развлечения")
+                print("5. Здоровье")
+                print("6. Другое")
+
+                new_category = input("Новая категория (1-6): ").strip()
+
+                if new_category:
+                    categories = {
+                        "1": "Еда",
+                        "2": "Транспорт",
+                        "3": "Дом",
+                        "4": "Развлечения",
+                        "5": "Здоровье",
+                        "6": "Другое",
+                    }
+
+                    if new_category in categories:
+                        category = categories[new_category]
+                    else:
+                        print("Ошибка: категория не изменена.")
 
                 operations[choice - 1] = (
                     f"{date} | Расход: -{format_money(new_amount)} тенге"
@@ -133,7 +161,6 @@ def edit_operation(operations):
             new_amount,
             category
         )
-
 
         print("Операция изменена!")
 
