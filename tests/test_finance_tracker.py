@@ -167,3 +167,17 @@ def test_choose_category_rejects_invalid_choice():
     assert result == "Транспорт"
 
 print("Все тесты пройдены!")
+
+def test_balance_after_edit_operation():
+    operations = [
+        "24.08.2026 10:00 | Доход: +10000 тенге",
+        "24.08.2026 11:00 | Расход: -3000 тенге | Категория: Еда",
+    ]
+
+    assert calculate_balance(operations) == 7000
+
+    operations[1] = (
+        "24.08.2026 11:00 | Расход: -2000 тенге | Категория: Еда"
+    )
+
+    assert calculate_balance(operations) == 8000
