@@ -79,6 +79,29 @@ def test_edit_operation():
         "Развлечения"
     )
 
+def test_edit_operation_keep_category():
+    operations = [
+        "24.08.2026 00:42 | Расход: -1500 тенге | Категория: Транспорт"
+    ]
+
+    with patch("builtins.input", side_effect=["1", "2000", ""]), \
+         patch("operations.get_operation_id_by_position", return_value=1), \
+         patch("operations.update_operation_by_id") as mock_update:
+
+        edit_operation(operations)
+
+    assert operations[0] == (
+        "24.08.2026 00:42 | Расход: -2 000 тенге | Категория: Транспорт"
+    )
+
+    mock_update.assert_called_once_with(
+        1,
+        "24.08.2026 00:42",
+        "Расход",
+        2000,
+        "Транспорт"
+    )
+
 def test_delete_operation():
     operations = [
         "Доход: +10000 тенге",
