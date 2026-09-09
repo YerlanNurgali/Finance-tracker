@@ -515,7 +515,7 @@ document.addEventListener("DOMContentLoaded", () => {
             date: new Date().toLocaleString("ru-RU"),
             operation_type: type,
             amount: amount,
-            category: type === "Расход" ? category : null
+            category: category
         };
 
         try {
