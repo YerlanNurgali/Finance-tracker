@@ -95,8 +95,8 @@ def serve_frontend():
     return FileResponse(FRONTEND_DIR / "index.html")
 
 @app.get("/statistics")
-def get_statistics():
-    rows = get_operations()
+def get_statistics(period: str = "all"):
+    rows = filter_operations(get_operations(), period)
 
     total_income = 0
     total_expense = 0

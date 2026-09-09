@@ -226,6 +226,27 @@ async function loadDashboardFromData(data) {
 
     const categories = data.categories || {};
 
+    const periodNames = {
+        all: "За всё время",
+        today: "Сегодня",
+        week: "За неделю",
+        month: "За месяц"
+    };
+    
+    const periodSummary =
+        document.getElementById("period-summary-content");
+    
+    const periodBalance =
+        data.total_income - data.total_expense;
+    
+    periodSummary.innerHTML = `
+        <p><strong>${periodNames[currentPeriod]}</strong></p>
+        <p>Доходы: ${formatMoney(data.total_income)}</p>
+        <p>Расходы: ${formatMoney(data.total_expense)}</p>
+        <p>Баланс: ${formatMoney(periodBalance)}</p>
+        <p>Операций: ${data.operations.length}</p>
+    `;
+
     renderExpensesChart(categories);
 
     if (Object.keys(categories).length === 0) {
@@ -356,7 +377,7 @@ async function loadDashboard() {
         const [balanceResponse, statisticsResponse, operationsResponse] =
             await Promise.all([
                 fetch(`${API_URL}/balance`),
-                fetch(`${API_URL}/statistics`),
+                fetch(`${API_URL}/statistics?period=${currentPeriod}`),
                 fetch(`${API_URL}/operations?period=${currentPeriod}`)
             ]);
 
@@ -391,6 +412,8 @@ async function loadDashboard() {
         console.warn(
             "API недоступен. Загружаем локальные данные."
         );
+
+        console.error("LOAD DASHBOARD ERROR:", error);
 
         const localData = getLocalData();
 
@@ -627,7 +650,7 @@ filterButtons.forEach(button => {
 
         button.classList.add("active");
 
-        await loadOperations();
+        await loadDashboard();
     });
 
 });
