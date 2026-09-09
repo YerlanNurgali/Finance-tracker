@@ -40,10 +40,37 @@ def choose_category():
 def add_income(balance, operations):
     income = get_amount("Введите сумму дохода: ")
 
+    print("\nВыберите категорию дохода:")
+    print("1. Зарплата")
+    print("2. Фриланс")
+    print("3. Бизнес")
+    print("4. Инвестиции")
+    print("5. Другое")
+
+    income_categories = {
+        "1": "Зарплата",
+        "2": "Фриланс",
+        "3": "Бизнес",
+        "4": "Инвестиции",
+        "5": "Другое",
+    }
+
+    while True:
+        choice = input("Ваш выбор: ")
+
+        if choice in income_categories:
+            category = income_categories[choice]
+            break
+
+        print("Ошибка: выберите число от 1 до 5.")
+
     balance += income
 
     date = datetime.now().strftime("%d.%m.%Y %H:%M")
-    operation = f"{date} | Доход: +{income} тенге"
+    operation = (
+        f"{date} | Доход: +{format_money(income)} тенге "
+        f"| Категория: {category}"
+    )
 
     operations.append(operation)
     save_operation_to_database(operation)
@@ -51,6 +78,22 @@ def add_income(balance, operations):
 
     return balance
 
+
+def test_add_income_with_category():
+    operations = []
+    balance = 0
+
+    with patch("builtins.input", side_effect=["5000", "1"]), \
+         patch("operations.save_operation_to_database") as mock_save:
+
+        new_balance = add_income(balance, operations)
+
+    assert new_balance == 5000
+    assert len(operations) == 1
+    assert "Доход: +5000" in operations[0]
+    assert "Категория: Зарплата" in operations[0]
+
+    mock_save.assert_called_once_with(operations[0])
 
 def add_expense(balance, operations):
     expense = get_amount("Введите сумму расхода: ")

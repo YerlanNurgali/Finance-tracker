@@ -160,14 +160,14 @@ def test_add_income():
     operations = []
     balance = 0
 
-    with patch("builtins.input", side_effect=["5000"]), \
+    with patch("builtins.input", side_effect=["5000", "1"]), \
          patch("operations.save_operation_to_database") as mock_save:
 
         new_balance = add_income(balance, operations)
 
     assert new_balance == 5000
     assert len(operations) == 1
-    assert "Доход: +5000" in operations[0]
+    assert "Доход: +5 000" in operations[0]
 
     mock_save.assert_called_once_with(operations[0])
 
