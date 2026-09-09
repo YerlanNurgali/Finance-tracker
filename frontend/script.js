@@ -485,6 +485,32 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
 
+    const operationType = document.getElementById("operation-type");
+    const operationCategory = document.getElementById("operation-category");
+
+    operationType.addEventListener("change", () => {
+        if (operationType.value === "Доход") {
+            operationCategory.innerHTML = `
+                <option value="Зарплата">Зарплата</option>
+                <option value="Фриланс">Фриланс</option>
+                <option value="Бизнес">Бизнес</option>
+                <option value="Инвестиции">Инвестиции</option>
+                <option value="Другое">Другое</option>
+            `;
+        } else {
+            operationCategory.innerHTML = `
+                <option value="Еда">Еда</option>
+                <option value="Транспорт">Транспорт</option>
+                <option value="Дом">Дом</option>
+                <option value="Развлечения">Развлечения</option>
+                <option value="Здоровье">Здоровье</option>
+                <option value="Другое">Другое</option>
+            `;
+        }
+    });
+
+    operationType.dispatchEvent(new Event("change"));
+
     cancelOperationBtn.addEventListener("click", () => {
         operationForm.classList.add("hidden");
 
