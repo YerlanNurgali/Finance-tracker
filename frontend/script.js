@@ -64,6 +64,8 @@ async function loadStatistics() {
 
     const categories = data.categories;
 
+    const totalCategoriesExpense = Object.values(categories).reduce((sum, amount) => sum + amount, 0);
+
     renderExpensesChart(categories);
 
     if (Object.keys(categories).length === 0) {
@@ -78,6 +80,8 @@ async function loadStatistics() {
 
         Object.entries(categories).forEach(([category, amount]) => {
 
+            const percentage = (amount / totalCategoriesExpense) * 100;
+
             const element = document.createElement("div");
 
             element.className = "category-item";
@@ -88,7 +92,7 @@ async function loadStatistics() {
                 </span>
 
                 <span class="category-amount">
-                    -${formatMoney(amount)}
+                    -${formatMoney(amount)} (${percentage.toFixed(0)}%)
                 </span>
             `;
 
@@ -236,6 +240,9 @@ async function loadDashboardFromData(data) {
 
         Object.entries(categories).forEach(([category, amount]) => {
 
+            const totalCategoriesExpense = Object.values(categories).reduce((sum, amount) => sum + amount, 0);
+            const percentage = (amount / totalCategoriesExpense) * 100;
+
             const element = document.createElement("div");
 
             element.className = "category-item";
@@ -246,7 +253,7 @@ async function loadDashboardFromData(data) {
                 </span>
 
                 <span class="category-amount">
-                    -${formatMoney(amount)}
+                    -${formatMoney(amount)} (${percentage.toFixed(0)}%)
                 </span>
             `;
 
