@@ -657,6 +657,12 @@ filterButtons.forEach(button => {
 
 });
 
+const exportCsvBtn = document.getElementById("export-csv-btn");
+
+exportCsvBtn.addEventListener("click", () => {
+    window.location.href = `${API_URL}/export/csv`;
+});
+
 let expensesChart = null;
 
 function renderExpensesChart(categories) {

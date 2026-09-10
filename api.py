@@ -1,4 +1,5 @@
 from pathlib import Path
+import csv
 
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -154,6 +155,36 @@ def get_all_operations(period: str = "all"):
         })
 
     return operations
+
+@app.get("/export/csv")
+def export_csv():
+    rows = get_operations()
+
+    file_path = BASE_DIR / "operations.csv"
+
+    with open(file_path, "w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file)
+
+        writer.writerow([
+            "Дата",
+            "Тип",
+            "Сумма",
+            "Категория"
+        ])
+
+        for operation_id, date, operation_type, amount, category in rows:
+            writer.writerow([
+                date,
+                operation_type,
+                amount,
+                category or ""
+            ])
+
+    return FileResponse(
+        file_path,
+        media_type="text/csv",
+        filename="operations.csv"
+    )
 
 @app.get("/balance")
 def get_balance():
