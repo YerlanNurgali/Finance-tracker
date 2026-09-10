@@ -437,3 +437,18 @@ button:hover {
     color: white;
     border-color: #2563eb;
 }
+
+#export-csv-btn {
+    background: #ffffff;
+    color: #2563eb;
+    border: 1px solid #2563eb;
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: 0.2s;
+}
+
+#export-csv-btn:hover {
+    background: #eff6ff;
+}
