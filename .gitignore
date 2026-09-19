@@ -5,3 +5,5 @@ operations.txt
 finance_tracker.db
 *.db
 .env
+__pycache__/
+.pytest_cache/
