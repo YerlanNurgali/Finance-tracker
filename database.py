@@ -41,7 +41,8 @@ def add_operation(date, operation_type, amount, category=None):
     if operation_type == "Расход" and not category:
         raise ValueError("Для расхода нужна категория")
 
-    with get_connection() as connection:
+    connection = get_connection()
+    try:
         cursor = connection.cursor()
 
         cursor.execute(
@@ -53,9 +54,14 @@ def add_operation(date, operation_type, amount, category=None):
             (date, operation_type, amount, category)
         )
 
+        connection.commit()
+    finally:
+        connection.close()
+
 
 def get_operations():
-    with get_connection() as connection:
+    connection = get_connection()
+    try:
         cursor = connection.cursor()
 
         cursor.execute(
@@ -68,11 +74,14 @@ def get_operations():
 
         operations = cursor.fetchall()
 
-    return operations
+        return operations
+    finally:
+        connection.close()
 
 
 def delete_operation(operation_id):
-    with get_connection() as connection:
+    connection = get_connection()
+    try:
         cursor = connection.cursor()
 
         cursor.execute(
@@ -80,9 +89,14 @@ def delete_operation(operation_id):
             (operation_id,)
         )
 
+        connection.commit()
+    finally:
+        connection.close()
+
 
 def update_operation(operation_id, date, operation_type, amount, category=None):
-    with get_connection() as connection:
+    connection = get_connection()
+    try:
         cursor = connection.cursor()
 
         cursor.execute(
@@ -96,3 +110,7 @@ def update_operation(operation_id, date, operation_type, amount, category=None):
             """,
             (date, operation_type, amount, category, operation_id)
         )
+
+        connection.commit()
+    finally:
+        connection.close()
