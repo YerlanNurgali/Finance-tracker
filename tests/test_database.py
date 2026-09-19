@@ -281,3 +281,60 @@ def test_update_operation_does_not_change_other_operations():
     assert result[1][2] == "Расход"
     assert result[1][3] == 2000
     assert result[1][4] == "Еда"
+
+
+def test_update_operation_rejects_negative_amount():
+    database.add_operation(
+        "26.08.2026 10:00",
+        "Доход",
+        10000
+    )
+
+    operations = database.get_operations()
+    operation_id = operations[0][0]
+
+    with pytest.raises(ValueError, match="Сумма должна быть больше нуля"):
+        database.update_operation(
+            operation_id,
+            "26.08.2026 12:00",
+            "Доход",
+            -5000
+        )
+
+
+def test_update_operation_rejects_invalid_type():
+    database.add_operation(
+        "26.08.2026 10:00",
+        "Доход",
+        10000
+    )
+
+    operations = database.get_operations()
+    operation_id = operations[0][0]
+
+    with pytest.raises(ValueError, match="Недопустимый тип операции"):
+        database.update_operation(
+            operation_id,
+            "26.08.2026 12:00",
+            "Что-то",
+            5000
+        )
+
+
+def test_update_expense_requires_category():
+    database.add_operation(
+        "26.08.2026 10:00",
+        "Доход",
+        10000
+    )
+
+    operations = database.get_operations()
+    operation_id = operations[0][0]
+
+    with pytest.raises(ValueError, match="Для расхода нужна категория"):
+        database.update_operation(
+            operation_id,
+            "26.08.2026 12:00",
+            "Расход",
+            2000
+        )

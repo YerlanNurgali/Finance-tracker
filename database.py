@@ -95,6 +95,15 @@ def delete_operation(operation_id):
 
 
 def update_operation(operation_id, date, operation_type, amount, category=None):
+    if amount <= 0:
+        raise ValueError("Сумма должна быть больше нуля")
+
+    if operation_type not in ("Доход", "Расход"):
+        raise ValueError("Недопустимый тип операции")
+
+    if operation_type == "Расход" and not category:
+        raise ValueError("Для расхода нужна категория")
+
     connection = get_connection()
     try:
         cursor = connection.cursor()
