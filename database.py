@@ -10,25 +10,32 @@ TABLE_NAME = "operations"
 
 
 def get_connection():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
+    database_url = os.getenv("DATABASE_URL")
+
+    if not database_url:
+        raise ValueError("DATABASE_URL не настроен")
+
+    return psycopg2.connect(database_url)
 
 
 def create_database():
     connection = get_connection()
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
 
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-            id SERIAL PRIMARY KEY,
-            date TEXT NOT NULL,
-            operation_type TEXT NOT NULL,
-            amount REAL NOT NULL,
-            category TEXT
-        )
-    """)
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+                id SERIAL PRIMARY KEY,
+                date TEXT NOT NULL,
+                operation_type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT
+            )
+        """)
 
-    connection.commit()
-    connection.close()
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def add_operation(date, operation_type, amount, category=None):

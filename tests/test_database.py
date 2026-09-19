@@ -4,7 +4,10 @@ import database
 
 
 @pytest.fixture(autouse=True)
-def setup_test_database(monkeypatch):
+def setup_test_database(monkeypatch, request):
+    if request.node.get_closest_marker("no_db"):
+        return
+
     monkeypatch.setattr(database, "TABLE_NAME", "operations_test")
 
     database.create_database()
@@ -338,3 +341,51 @@ def test_update_expense_requires_category():
             "Расход",
             2000
         )
+
+
+def test_get_connection_requires_database_url(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(ValueError, match="DATABASE_URL не настроен"):
+        database.get_connection()
+
+
+def test_get_connection_returns_working_connection():
+    connection = database.get_connection()
+
+    try:
+        assert connection.closed == 0
+
+        cursor = connection.cursor()
+        cursor.execute("SELECT 1")
+
+        assert cursor.fetchone()[0] == 1
+    finally:
+        connection.close()
+
+
+@pytest.mark.no_db
+def test_create_database_closes_connection(monkeypatch):
+    class FakeCursor:
+        def execute(self, *args, **kwargs):
+            pass
+
+    class FakeConnection:
+        def __init__(self):
+            self.closed = 0
+
+        def cursor(self):
+            return FakeCursor()
+
+        def commit(self):
+            pass
+
+        def close(self):
+            self.closed = 1
+
+    connection = FakeConnection()
+    monkeypatch.setattr(database, "get_connection", lambda: connection)
+
+    database.create_database()
+
+    assert connection.closed == 1
