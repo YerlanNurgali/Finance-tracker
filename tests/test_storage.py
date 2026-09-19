@@ -52,6 +52,23 @@ def test_load_operations_from_database():
     assert balance == 7500
 
 
+def test_load_income_with_category():
+    database.add_operation(
+        "26.08.2026 10:00",
+        "Доход",
+        10000,
+        "Зарплата"
+    )
+
+    operations, balance = load_operations_from_database()
+
+    assert operations == [
+        "26.08.2026 10:00 | Доход: +10000 тенге | Категория: Зарплата"
+    ]
+
+    assert balance == 10000
+
+
 def test_save_operation_to_database():
     save_operation_to_database(
         "26.08.2026 12:00 | Доход: +15000 тенге"

@@ -15,6 +15,10 @@ def load_operations_from_database():
     for operation_id, date, operation_type, amount, category in rows:
         if operation_type == "Доход":
             operation = f"{date} | Доход: +{amount:g} тенге"
+
+            if category:
+                operation += f" | Категория: {category}"
+
             balance += amount
 
         elif operation_type == "Расход":
