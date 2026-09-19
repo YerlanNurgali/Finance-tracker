@@ -1,25 +1,20 @@
-import os
-
-import psycopg2
-from dotenv import load_dotenv
+import sqlite3
 
 
-load_dotenv()
-
-TABLE_NAME = "operations"
+DB_NAME = "finance_tracker.db"
 
 
 def get_connection():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
+    return sqlite3.connect(DB_NAME)
 
 
 def create_database():
     connection = get_connection()
     cursor = connection.cursor()
 
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-            id SERIAL PRIMARY KEY,
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS operations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
             operation_type TEXT NOT NULL,
             amount REAL NOT NULL,
@@ -45,10 +40,9 @@ def add_operation(date, operation_type, amount, category=None):
         cursor = connection.cursor()
 
         cursor.execute(
-            f"""
-            INSERT INTO {TABLE_NAME}
-            (date, operation_type, amount, category)
-            VALUES (%s, %s, %s, %s)
+            """
+            INSERT INTO operations (date, operation_type, amount, category)
+            VALUES (?, ?, ?, ?)
             """,
             (date, operation_type, amount, category)
         )
@@ -59,9 +53,9 @@ def get_operations():
         cursor = connection.cursor()
 
         cursor.execute(
-            f"""
+            """
             SELECT id, date, operation_type, amount, category
-            FROM {TABLE_NAME}
+            FROM operations
             ORDER BY id
             """
         )
@@ -70,13 +64,12 @@ def get_operations():
 
     return operations
 
-
 def delete_operation(operation_id):
     with get_connection() as connection:
         cursor = connection.cursor()
 
         cursor.execute(
-            f"DELETE FROM {TABLE_NAME} WHERE id = %s",
+            "DELETE FROM operations WHERE id = ?",
             (operation_id,)
         )
 
@@ -86,13 +79,11 @@ def update_operation(operation_id, date, operation_type, amount, category=None):
         cursor = connection.cursor()
 
         cursor.execute(
-            f"""
-            UPDATE {TABLE_NAME}
-            SET date = %s,
-                operation_type = %s,
-                amount = %s,
-                category = %s
-            WHERE id = %s
+            """
+            UPDATE operations
+            SET date = ?, operation_type = ?, amount = ?, category = ?
+            WHERE id = ?
             """,
             (date, operation_type, amount, category, operation_id)
         )
+

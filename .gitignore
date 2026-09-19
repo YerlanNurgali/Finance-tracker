@@ -4,3 +4,4 @@ operations.txt
 .venv/
 finance_tracker.db
 *.db
+.env

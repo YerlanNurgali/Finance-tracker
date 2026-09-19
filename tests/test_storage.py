@@ -1,14 +1,34 @@
+import pytest
+
 import database
-from storage import load_operations_from_database
+
+from storage import (
+    load_operations_from_database,
+    save_operation_to_database,
+    delete_operation_by_id,
+    update_operation_by_id,
+    get_operation_id_by_position
+)
 
 
-def test_load_operations_from_database(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+@pytest.fixture(autouse=True)
+def setup_test_database(monkeypatch):
+    monkeypatch.setattr(database, "TABLE_NAME", "operations_test")
 
     database.create_database()
 
+    connection = database.get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        "TRUNCATE TABLE operations_test RESTART IDENTITY"
+    )
+
+    connection.commit()
+    connection.close()
+
+
+def test_load_operations_from_database():
     database.add_operation(
         "26.08.2026 10:00",
         "Доход",
@@ -31,16 +51,8 @@ def test_load_operations_from_database(tmp_path, monkeypatch):
 
     assert balance == 7500
 
-from storage import save_operation_to_database
 
-
-def test_save_operation_to_database(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_save_operation_to_database():
     save_operation_to_database(
         "26.08.2026 12:00 | Доход: +15000 тенге"
     )
@@ -64,16 +76,7 @@ def test_save_operation_to_database(tmp_path, monkeypatch):
     assert result[1][4] == "Еда"
 
 
-from storage import delete_operation_by_id
-
-
-def test_delete_operation_by_id_from_storage(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_delete_operation_by_id_from_storage():
     database.add_operation(
         "26.08.2026 10:00",
         "Доход",
@@ -101,16 +104,7 @@ def test_delete_operation_by_id_from_storage(tmp_path, monkeypatch):
     assert result[0][3] == 2000
 
 
-from storage import update_operation_by_id
-
-
-def test_update_operation_by_id_from_storage(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_update_operation_by_id_from_storage():
     database.add_operation(
         "26.08.2026 10:00",
         "Доход",
@@ -137,16 +131,8 @@ def test_update_operation_by_id_from_storage(tmp_path, monkeypatch):
     assert result[0][3] == 3000
     assert result[0][4] == "Еда"
 
-from storage import get_operation_id_by_position
 
-
-def test_get_operation_id_by_position(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_get_operation_id_by_position():
     database.add_operation(
         "26.08.2026 10:00",
         "Доход",

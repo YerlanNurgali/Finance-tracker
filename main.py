@@ -37,7 +37,7 @@ def format_operation(operation):
             category = parts[2]
 
         if operation_data.startswith("Доход:"):
-            amount = float(operation_data.split("+")[1].split(" тенге")[0])
+            amount = float(operation_data.split("+")[1].split(" тенге")[0].replace(" ", "") )
             result = f"{date} | Доход: +{format_money(amount)} тенге"
 
         elif operation_data.startswith("Расход:"):

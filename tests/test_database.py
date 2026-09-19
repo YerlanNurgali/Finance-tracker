@@ -1,15 +1,26 @@
-import sqlite3
+import pytest
 
 import database
 
 
-def test_add_and_get_operation(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
+@pytest.fixture(autouse=True)
+def setup_test_database(monkeypatch):
+    monkeypatch.setattr(database, "TABLE_NAME", "operations_test")
 
     database.create_database()
 
+    connection = database.get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        "TRUNCATE TABLE operations_test RESTART IDENTITY"
+    )
+
+    connection.commit()
+    connection.close()
+
+
+def test_add_and_get_operation():
     database.add_operation(
         "25.08.2026 20:00",
         "Доход",
@@ -25,13 +36,7 @@ def test_add_and_get_operation(tmp_path, monkeypatch):
     assert operations[0][4] is None
 
 
-def test_delete_operation(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_delete_operation():
     database.add_operation(
         "25.08.2026 20:00",
         "Расход",
@@ -47,13 +52,7 @@ def test_delete_operation(tmp_path, monkeypatch):
     assert database.get_operations() == []
 
 
-def test_update_operation(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_update_operation():
     database.add_operation(
         "25.08.2026 20:00",
         "Расход",
@@ -80,34 +79,30 @@ def test_update_operation(tmp_path, monkeypatch):
     assert updated[0][4] == "Развлечения"
 
 
-def test_create_database(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
+def test_create_database():
     database.create_database()
 
-    connection = sqlite3.connect(db_path)
+    connection = database.get_connection()
     cursor = connection.cursor()
 
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='operations'"
+        """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_name = 'operations_test'
+        )
+        """
     )
 
-    result = cursor.fetchone()
+    result = cursor.fetchone()[0]
 
     connection.close()
 
-    assert result == ("operations",)
+    assert result is True
 
 
-def test_add_expense_with_category(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_add_expense_with_category():
     database.add_operation(
         "25.08.2026 20:00",
         "Расход",
@@ -121,69 +116,35 @@ def test_add_expense_with_category(tmp_path, monkeypatch):
     assert operations[0][3] == 3500
     assert operations[0][4] == "Развлечения"
 
-def test_add_operation_rejects_negative_amount(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
 
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
-    try:
+def test_add_operation_rejects_negative_amount():
+    with pytest.raises(ValueError):
         database.add_operation(
             "25.08.2026 20:00",
             "Доход",
             -5000
         )
-    except ValueError:
-        pass
-    else:
-        assert False, "Отрицательная сумма должна вызывать ValueError"
 
-def test_add_operation_rejects_invalid_type(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
 
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
-    try:
+def test_add_operation_rejects_invalid_type():
+    with pytest.raises(ValueError):
         database.add_operation(
             "25.08.2026 20:00",
             "Что-то",
             5000
         )
-    except ValueError:
-        pass
-    else:
-        assert False, "Недопустимый тип операции должен вызывать ValueError"
 
 
-def test_expense_requires_category(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
-    try:
+def test_expense_requires_category():
+    with pytest.raises(ValueError):
         database.add_operation(
             "25.08.2026 20:00",
             "Расход",
             2000
         )
-    except ValueError:
-        pass
-    else:
-        assert False, "Для расхода категория обязательна"
 
 
-def test_income_can_be_without_category(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_income_can_be_without_category():
     database.add_operation(
         "25.08.2026 20:00",
         "Доход",
@@ -197,13 +158,8 @@ def test_income_can_be_without_category(tmp_path, monkeypatch):
     assert operations[0][3] == 5000
     assert operations[0][4] is None
 
-def test_delete_first_operation_by_id(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
 
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_delete_first_operation_by_id():
     database.add_operation(
         "25.08.2026 20:00",
         "Доход",
@@ -229,13 +185,8 @@ def test_delete_first_operation_by_id(tmp_path, monkeypatch):
     assert len(result) == 1
     assert result[0][0] == first_id
 
-def test_delete_operation_by_id(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
 
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_delete_operation_by_id():
     database.add_operation(
         "26.08.2026 10:00",
         "Доход",
@@ -263,13 +214,8 @@ def test_delete_operation_by_id(tmp_path, monkeypatch):
     assert operations[0][2] == "Расход"
     assert operations[0][3] == 2000
 
-def test_update_operation_by_id(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
 
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_update_operation_by_id():
     database.add_operation(
         "26.08.2026 10:00",
         "Доход",
@@ -297,13 +243,7 @@ def test_update_operation_by_id(tmp_path, monkeypatch):
     assert result[0][4] == "Еда"
 
 
-def test_update_operation_does_not_change_other_operations(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-
-    monkeypatch.setattr(database, "DB_NAME", str(db_path))
-
-    database.create_database()
-
+def test_update_operation_does_not_change_other_operations():
     database.add_operation(
         "26.08.2026 10:00",
         "Доход",

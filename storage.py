@@ -43,17 +43,25 @@ def save_operation_to_database(operation):
 
     date = parts[0]
     operation_data = parts[1]
-
+    
     if operation_data.startswith("Доход:"):
         amount = float(
             operation_data.split("+")[1].split(" тенге")[0].replace(" ", "")
         )
 
+        category = None
+
+        if len(parts) > 2 and parts[2].startswith("Категория:"):
+            category = parts[2].replace("Категория:", "").strip()
+
         add_operation(
             date,
             "Доход",
-            amount
+            amount,
+            category
         )
+
+
 
     elif operation_data.startswith("Расход:"):
         amount = float(
