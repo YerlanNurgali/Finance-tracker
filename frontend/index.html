@@ -16,24 +16,35 @@
     <div class="container">
 
         <header class="header">
-            <h1>Finance Tracker</h1>
-            <p>Управляй своими финансами</p>
+            <div class="header-main">
+                <div>
+                    <h1 data-i18n="appName">Finance Tracker</h1>
+                    <p data-i18n="appDescription">Управляй своими финансами</p>
+                </div>
+                <div class="language-switcher" data-i18n-aria-label="languageSelector" aria-label="Выбор языка">
+                    <button type="button" class="language-button" data-language="kk">KZ</button>
+                    <span aria-hidden="true">|</span>
+                    <button type="button" class="language-button" data-language="en">EN</button>
+                    <span aria-hidden="true">|</span>
+                    <button type="button" class="language-button" data-language="ru">RU</button>
+                </div>
+            </div>
         </header>
 
         <section class="balance-card">
-            <p class="balance-label">Текущий баланс</p>
+            <p class="balance-label" data-i18n="currentBalance">Текущий баланс</p>
             <h2 id="balance">0 ₸</h2>
         </section>
 
         <section class="summary">
 
             <div class="summary-card income">
-                <p>Доходы</p>
+                <p data-i18n="income">Доходы</p>
                 <h3 id="total-income">0 ₸</h3>
             </div>
 
             <div class="summary-card expense">
-                <p>Расходы</p>
+                <p data-i18n="expense">Расходы</p>
                 <h3 id="total-expense">0 ₸</h3>
             </div>
 
@@ -42,11 +53,11 @@
         <section class="period-summary">
 
             <div class="section-header">
-                <h2>Сводка за период</h2>
+                <h2 data-i18n="periodSummary">Сводка за период</h2>
             </div>
         
             <div id="period-summary-content">
-                <p>Загрузка...</p>
+                <p data-i18n="loading">Загрузка...</p>
             </div>
         
         </section>
@@ -54,17 +65,17 @@
         <section class="categories-section">
 
             <div class="section-header">
-                <h2>Расходы по категориям</h2>
+                <h2 data-i18n="expensesByCategory">Расходы по категориям</h2>
             </div>
         
             <div id="categories-list">
                 <p class="empty-message">
-                    Загрузка категорий...
+                    <span data-i18n="loadingCategories">Загрузка категорий...</span>
                 </p>
             </div>
 
             <div class="chart-container">
-                <canvas id="expenses-chart" width="600" height="220" aria-label="График расходов по категориям"></canvas>
+                <canvas id="expenses-chart" width="600" height="220" data-i18n-aria-label="expensesChart" aria-label=""></canvas>
             </div>
         
         </section>
@@ -72,41 +83,41 @@
         <section class="operations-section">
 
             <div class="section-header">
-                <h2>История операций</h2>
+                <h2 data-i18n="operationHistory">История операций</h2>
 
                 <button id="add-operation-btn">
-                    + Добавить
+                    <span data-i18n="add">+ Добавить</span>
                 </button>
             </div>
 
             <div class="operation-filters">
                 <button class="filter-btn active" data-period="all">
-                    Все
+                    <span data-i18n="allTime">Все</span>
                 </button>
             
                 <button class="filter-btn" data-period="today">
-                    Сегодня
+                    <span data-i18n="today">Сегодня</span>
                 </button>
             
                 <button class="filter-btn" data-period="week">
-                    Неделя
+                    <span data-i18n="week">Неделя</span>
                 </button>
             
                 <button class="filter-btn" data-period="month">
-                    Месяц
+                    <span data-i18n="month">Месяц</span>
                 </button>
 
                 <button id="export-csv-btn">
-                    Экспорт CSV
+                    <span data-i18n="exportCsv">Экспорт CSV</span>
                 </button>
             </div>
             
             <div id="operation-form" class="operation-form hidden">
 
-    <h3 id="operation-form-title">Новая операция</h3>
+    <h3 id="operation-form-title" data-i18n="newOperation">Новая операция</h3>
 
     <label for="operation-type">
-        Тип операции
+        <span data-i18n="operationType">Тип операции</span>
     </label>
 
     <select id="operation-type">
@@ -116,13 +127,14 @@
 
 
     <label for="operation-amount">
-        Сумма
+        <span data-i18n="amount">Сумма</span>
     </label>
 
     <input
         type="number"
         id="operation-amount"
         placeholder="Введите сумму"
+        data-i18n-placeholder="enterAmount"
         min="1"
         step="0.01"
     >
@@ -131,7 +143,7 @@
     <div id="category-field">
 
         <label for="operation-category">
-            Категория
+            <span data-i18n="category">Категория</span>
         </label>
 
         <select id="operation-category">
@@ -149,11 +161,11 @@
     <div class="form-buttons">
 
         <button id="save-operation-btn">
-            Сохранить
+            <span data-i18n="save">Сохранить</span>
         </button>
 
         <button id="cancel-operation-btn" type="button">
-            Отмена
+            <span data-i18n="cancel">Отмена</span>
         </button>
 
     </div>
@@ -162,7 +174,7 @@
 
             <div id="operations-list">
                 <p class="empty-message">
-                    Загрузка операций...
+                    <span data-i18n="loadingOperations">Загрузка операций...</span>
                 </p>
             </div>
 
@@ -170,6 +182,7 @@
 
     </div>
 
+    <script src="/static/i18n.js"></script>
     <script src="/static/script.js"></script>
 
 </body>

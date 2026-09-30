@@ -1,8 +1,9 @@
-const CACHE_NAME = "finance-tracker-v4";
+const CACHE_NAME = "finance-tracker-v5";
 
 const FILES_TO_CACHE = [
     "/",
     "/static/style.css",
+    "/static/i18n.js",
     "/static/script.js",
     "/static/manifest.json",
     "/static/icons/icon-192.png",

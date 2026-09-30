@@ -24,6 +24,37 @@ body {
     margin-bottom: 30px;
 }
 
+.header-main {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.language-switcher {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #9ca3af;
+    white-space: nowrap;
+}
+
+.language-button {
+    background: transparent;
+    color: #6b7280;
+    padding: 4px 2px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.language-button.active,
+.language-button:hover {
+    color: #111827;
+    background: #e5e7eb;
+    opacity: 1;
+}
+
 .header h1 {
     font-size: 32px;
     margin-bottom: 8px;
@@ -174,6 +205,15 @@ button:hover {
 
     .header {
         margin-bottom: 20px;
+    }
+
+    .header-main {
+        align-items: center;
+    }
+
+    .language-switcher {
+        gap: 3px;
+        font-size: 12px;
     }
 
     .header h1 {
