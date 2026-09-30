@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 import csv
+import json
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 from typing import Optional
@@ -15,7 +16,24 @@ BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 VALID_PERIODS = {"all", "today", "week", "month"}
 
-app = FastAPI(title="Finance Tracker API", version="2.0.0")
+
+class UTF8JSONResponse(JSONResponse):
+    media_type = "application/json; charset=utf-8"
+
+    def render(self, content):
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+
+app = FastAPI(
+    title="Finance Tracker API",
+    version="2.0.0",
+    default_response_class=UTF8JSONResponse,
+)
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 

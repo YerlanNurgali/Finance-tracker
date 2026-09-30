@@ -29,6 +29,18 @@ def test_api_balance_operations_and_statistics(monkeypatch):
     assert statistics["categories"] == {"Еда": 2500.0}
 
 
+def test_api_json_response_is_utf8(monkeypatch):
+    monkeypatch.setattr(api, "get_operations", lambda: ROWS)
+    response = api.UTF8JSONResponse(content=api.list_operations("all"))
+
+    assert response.headers["content-type"] == "application/json; charset=utf-8"
+    body = response.body.decode("utf-8")
+    assert '"type":"Доход"' in body
+    assert '"category":"Зарплата"' in body
+    assert '"type":"Расход"' in body
+    assert '"category":"Еда"' in body
+
+
 def test_api_rejects_unknown_period():
     with pytest.raises(HTTPException) as error:
         api.list_operations("year")
