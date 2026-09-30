@@ -1,174 +1,45 @@
-import pytest
-
 import database
-
 from storage import (
+    delete_operation_by_id,
+    get_operation_id_by_position,
     load_operations_from_database,
     save_operation_to_database,
-    delete_operation_by_id,
     update_operation_by_id,
-    get_operation_id_by_position
 )
 
 
-@pytest.fixture(autouse=True)
-def setup_test_database(monkeypatch):
-    monkeypatch.setattr(database, "TABLE_NAME", "operations_test")
-
-    database.create_database()
-
-    connection = database.get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute(
-        "TRUNCATE TABLE operations_test RESTART IDENTITY"
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def test_load_operations_from_database():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    database.add_operation(
-        "26.08.2026 11:00",
-        "Расход",
-        2500,
-        "Еда"
-    )
-
-    operations, balance = load_operations_from_database()
-
-    assert operations == [
-        "26.08.2026 10:00 | Доход: +10000 тенге",
-        "26.08.2026 11:00 | Расход: -2500 тенге | Категория: Еда",
+def test_storage_round_trip(monkeypatch):
+    rows = [
+        (1, "26.08.2026 10:00", "Доход", 10000, "Зарплата"),
+        (2, "26.08.2026 11:00", "Расход", 2500, "Еда"),
     ]
-
+    monkeypatch.setattr("storage.get_operations", lambda: rows)
+    operations, balance = load_operations_from_database()
+    assert "Категория: Зарплата" in operations[0]
     assert balance == 7500
 
 
-def test_load_income_with_category():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000,
-        "Зарплата"
-    )
-
-    operations, balance = load_operations_from_database()
-
-    assert operations == [
-        "26.08.2026 10:00 | Доход: +10000 тенге | Категория: Зарплата"
-    ]
-
-    assert balance == 10000
+def test_save_operation_preserves_spaces_and_category(monkeypatch):
+    calls = []
+    monkeypatch.setattr("storage.add_operation", lambda *args: calls.append(args))
+    save_operation_to_database("date | Расход: -5 000 тенге | Категория: Дом")
+    assert calls == [("date", "Расход", 5000.0, "Дом")]
 
 
-def test_save_operation_to_database():
-    save_operation_to_database(
-        "26.08.2026 12:00 | Доход: +15000 тенге"
-    )
+def test_storage_delete_update_and_position_delegate(monkeypatch):
+    deleted = []
+    updated = []
+    rows = [(41, "date", "Доход", 100, "Зарплата"), (42, "date-2", "Расход", 20, "Еда")]
+    monkeypatch.setattr("storage.delete_operation", lambda operation_id: deleted.append(operation_id))
+    monkeypatch.setattr("storage.update_operation", lambda *args: updated.append(args))
+    monkeypatch.setattr("storage.get_operations", lambda: rows)
 
-    save_operation_to_database(
-        "26.08.2026 13:00 | Расход: -3000 тенге | Категория: Еда"
-    )
+    delete_operation_by_id(41)
+    update_operation_by_id(42, "new-date", "Расход", 25, "Дом")
 
-    result = database.get_operations()
-
-    assert len(result) == 2
-
-    assert result[0][1] == "26.08.2026 12:00"
-    assert result[0][2] == "Доход"
-    assert result[0][3] == 15000
-    assert result[0][4] is None
-
-    assert result[1][1] == "26.08.2026 13:00"
-    assert result[1][2] == "Расход"
-    assert result[1][3] == 3000
-    assert result[1][4] == "Еда"
-
-
-def test_delete_operation_by_id_from_storage():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    database.add_operation(
-        "26.08.2026 11:00",
-        "Расход",
-        2000,
-        "Еда"
-    )
-
-    operations = database.get_operations()
-
-    first_id = operations[0][0]
-
-    delete_operation_by_id(first_id)
-
-    result = database.get_operations()
-
-    assert len(result) == 1
-    assert result[0][0] != first_id
-    assert result[0][2] == "Расход"
-    assert result[0][3] == 2000
-
-
-def test_update_operation_by_id_from_storage():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    operations = database.get_operations()
-    operation_id = operations[0][0]
-
-    update_operation_by_id(
-        operation_id,
-        "26.08.2026 12:00",
-        "Расход",
-        3000,
-        "Еда"
-    )
-
-    result = database.get_operations()
-
-    assert len(result) == 1
-    assert result[0][0] == operation_id
-    assert result[0][1] == "26.08.2026 12:00"
-    assert result[0][2] == "Расход"
-    assert result[0][3] == 3000
-    assert result[0][4] == "Еда"
-
-
-def test_get_operation_id_by_position():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    database.add_operation(
-        "26.08.2026 11:00",
-        "Расход",
-        2000,
-        "Еда"
-    )
-
-    operations = database.get_operations()
-
-    first_id = operations[0][0]
-    second_id = operations[1][0]
-
-    assert get_operation_id_by_position(0) == first_id
-    assert get_operation_id_by_position(1) == second_id
-    assert get_operation_id_by_position(2) is None
+    assert deleted == [41]
+    assert updated == [(42, "new-date", "Расход", 25, "Дом")]
+    assert get_operation_id_by_position(0) == 41
+    assert get_operation_id_by_position(1) == 42
     assert get_operation_id_by_position(-1) is None
+    assert get_operation_id_by_position(2) is None

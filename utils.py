@@ -1,46 +1,39 @@
+import re
+
+
 def format_money(amount):
-    return f"{amount:,.0f}".replace(",", " ")
+    return f"{float(amount):,.0f}".replace(",", " ")
+
+
+def parse_amount(value):
+    if isinstance(value, (int, float)):
+        amount = float(value)
+    else:
+        normalized = str(value).strip().replace(" ", "").replace("\u00a0", "")
+        amount = float(normalized.replace(",", "."))
+    if amount <= 0:
+        raise ValueError("Сумма должна быть больше нуля")
+    return amount
 
 
 def parse_operation(operation):
-    operation_type = None
-    amount = 0
+    parts = [part.strip() for part in str(operation).split("|")]
+    operation_data = parts[1] if len(parts) > 1 else parts[0]
     category = ""
-
-    if "|" in operation:
-        parts = [part.strip() for part in operation.split("|")]
-        operation_data = parts[1]
-
-        if len(parts) > 2 and parts[2].startswith("Категория:"):
-            category = parts[2].replace("Категория:", "").strip()
-    else:
-        operation_data = operation
-
-    if operation_data.startswith("Доход:"):
-        operation_type = "Доход"
-        amount = float(
-            operation_data.split("+")[1].split(" тенге")[0].replace(" ", "")
-        )
-
-    elif operation_data.startswith("Расход:"):
-        operation_type = "Расход"
-        amount = float(
-            operation_data.split("-")[1].split(" тенге")[0].replace(" ", "")
-        )
-
-    return operation_type, amount, category
+    for part in parts[2:]:
+        if part.startswith("Категория:"):
+            category = part.split(":", 1)[1].strip()
+            break
+    match = re.match(r"^(Доход|Расход):\s*([+-]?[\d\s\u00a0]+(?:[.,]\d+)?)\s*тенге", operation_data)
+    if not match:
+        return None, 0, category
+    amount = abs(float(match.group(2).replace(" ", "").replace("\u00a0", "").replace(",", ".")))
+    return match.group(1), amount, category
 
 
 def get_amount(message):
     while True:
         try:
-            amount = float(input(message))
-
-            if amount <= 0:
-                print("Ошибка: сумма должна быть больше 0.")
-                continue
-
-            return amount
-
-        except ValueError:
-            print("Ошибка: введите число.")
+            return parse_amount(input(message))
+        except (TypeError, ValueError):
+            print("Ошибка: введите положительную сумму.")

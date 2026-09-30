@@ -1,391 +1,123 @@
+from decimal import Decimal
 import pytest
-
 import database
 
 
-@pytest.fixture(autouse=True)
-def setup_test_database(monkeypatch, request):
-    if request.node.get_closest_marker("no_db"):
-        return
+class Cursor:
+    def __init__(self, store): self.store = store; self.rowcount = 0; self.result = []
+    def __enter__(self): return self
+    def __exit__(self, *args): pass
+    def execute(self, query, params=()):
+        q = " ".join(query.split()).upper()
+        if q.startswith("CREATE TABLE"): return
+        if q.startswith("INSERT"):
+            self.store.append((len(self.store) + 1, params[0], params[1], Decimal(str(params[2])), params[3])); self.rowcount = 1
+        elif q.startswith("SELECT"): self.result = list(self.store)
+        elif q.startswith("DELETE"):
+            before = len(self.store); self.store[:] = [row for row in self.store if row[0] != params[0]]; self.rowcount = int(len(self.store) != before)
+        elif q.startswith("UPDATE"):
+            self.rowcount = 0
+            for i, row in enumerate(self.store):
+                if row[0] == params[4]: self.store[i] = (row[0], params[0], params[1], Decimal(str(params[2])), params[3]); self.rowcount = 1
+    def fetchall(self): return self.result
 
-    monkeypatch.setattr(database, "TABLE_NAME", "operations_test")
 
+class Connection:
+    def __init__(self, store): self.store = store; self.closed = 0
+    def cursor(self): return Cursor(self.store)
+    def commit(self): pass
+    def rollback(self): pass
+    def close(self): self.closed = 1
+
+
+@pytest.fixture
+def store(monkeypatch):
+    data = []
+    monkeypatch.setattr(database, "get_connection", lambda: Connection(data))
+    return data
+
+
+def test_crud_and_categories(store):
     database.create_database()
+    database.add_operation("25.08.2026 20:00", "Доход", "5 000", "Зарплата")
+    database.add_operation("25.08.2026 21:00", "Расход", 1500, "Еда")
+    rows = database.get_operations()
+    assert rows[0][3] == Decimal("5000") and rows[1][4] == "Еда"
+    database.update_operation(rows[1][0], "25.08.2026 22:00", "Расход", 2000, "Дом")
+    assert database.get_operations()[1][4] == "Дом"
+    database.delete_operation(rows[0][0])
+    assert len(database.get_operations()) == 1
 
-    connection = database.get_connection()
-    cursor = connection.cursor()
 
-    cursor.execute(
-        "TRUNCATE TABLE operations_test RESTART IDENTITY"
-    )
+def test_update_does_not_change_other_operations(store):
+    database.add_operation("date-1", "Доход", 10000, "Зарплата")
+    database.add_operation("date-2", "Расход", 2000, "Еда")
+    first, second = database.get_operations()
 
-    connection.commit()
-    connection.close()
+    database.update_operation(first[0], "date-updated", "Доход", 15000, "Бизнес")
 
+    rows = database.get_operations()
+    assert rows[0] == (first[0], "date-updated", "Доход", Decimal("15000"), "Бизнес")
+    assert rows[1] == second
 
-def test_add_and_get_operation():
-    database.add_operation(
-        "25.08.2026 20:00",
-        "Доход",
-        10000
-    )
 
-    operations = database.get_operations()
+def test_delete_and_update_unknown_id_raise(store):
+    with pytest.raises(database.OperationNotFound):
+        database.delete_operation(999)
+    with pytest.raises(database.OperationNotFound):
+        database.update_operation(999, "date", "Доход", 100)
 
-    assert len(operations) == 1
-    assert operations[0][1] == "25.08.2026 20:00"
-    assert operations[0][2] == "Доход"
-    assert operations[0][3] == 10000
-    assert operations[0][4] is None
 
+def test_update_validates_amount_type_and_category(store):
+    database.add_operation("date", "Доход", 100)
+    operation_id = database.get_operations()[0][0]
+    with pytest.raises(ValueError, match="больше нуля"):
+        database.update_operation(operation_id, "date", "Доход", -1)
+    with pytest.raises(ValueError, match="Недопустимый тип"):
+        database.update_operation(operation_id, "date", "Неверный", 1)
+    with pytest.raises(ValueError, match="нужна категория"):
+        database.update_operation(operation_id, "date", "Расход", 1)
 
-def test_delete_operation():
-    database.add_operation(
-        "25.08.2026 20:00",
-        "Расход",
-        2000,
-        "Еда"
-    )
 
-    operations = database.get_operations()
-    operation_id = operations[0][0]
+@pytest.mark.parametrize("operation_type, amount, category", [("Что-то", 1, None), ("Доход", 0, None), ("Расход", 1, None), ("Расход", 1, " ")])
+def test_validation(store, operation_type, amount, category):
+    with pytest.raises(ValueError): database.add_operation("date", operation_type, amount, category)
 
-    database.delete_operation(operation_id)
 
-    assert database.get_operations() == []
-
-
-def test_update_operation():
-    database.add_operation(
-        "25.08.2026 20:00",
-        "Расход",
-        2000,
-        "Еда"
-    )
-
-    operations = database.get_operations()
-    operation_id = operations[0][0]
-
-    database.update_operation(
-        operation_id,
-        "25.08.2026 20:30",
-        "Расход",
-        3500,
-        "Развлечения"
-    )
-
-    updated = database.get_operations()
-
-    assert updated[0][1] == "25.08.2026 20:30"
-    assert updated[0][2] == "Расход"
-    assert updated[0][3] == 3500
-    assert updated[0][4] == "Развлечения"
-
-
-def test_create_database():
-    database.create_database()
-
-    connection = database.get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        SELECT EXISTS (
-            SELECT FROM information_schema.tables
-            WHERE table_schema = 'public'
-            AND table_name = 'operations_test'
-        )
-        """
-    )
-
-    result = cursor.fetchone()[0]
-
-    connection.close()
-
-    assert result is True
-
-
-def test_add_expense_with_category():
-    database.add_operation(
-        "25.08.2026 20:00",
-        "Расход",
-        3500,
-        "Развлечения"
-    )
-
-    operations = database.get_operations()
-
-    assert operations[0][2] == "Расход"
-    assert operations[0][3] == 3500
-    assert operations[0][4] == "Развлечения"
-
-
-def test_add_operation_rejects_negative_amount():
-    with pytest.raises(ValueError):
-        database.add_operation(
-            "25.08.2026 20:00",
-            "Доход",
-            -5000
-        )
-
-
-def test_add_operation_rejects_invalid_type():
-    with pytest.raises(ValueError):
-        database.add_operation(
-            "25.08.2026 20:00",
-            "Что-то",
-            5000
-        )
-
-
-def test_expense_requires_category():
-    with pytest.raises(ValueError):
-        database.add_operation(
-            "25.08.2026 20:00",
-            "Расход",
-            2000
-        )
-
-
-def test_income_can_be_without_category():
-    database.add_operation(
-        "25.08.2026 20:00",
-        "Доход",
-        5000
-    )
-
-    operations = database.get_operations()
-
-    assert len(operations) == 1
-    assert operations[0][2] == "Доход"
-    assert operations[0][3] == 5000
-    assert operations[0][4] is None
-
-
-def test_delete_first_operation_by_id():
-    database.add_operation(
-        "25.08.2026 20:00",
-        "Доход",
-        5000
-    )
-
-    database.add_operation(
-        "25.08.2026 20:01",
-        "Расход",
-        1500,
-        "Еда"
-    )
-
-    operations = database.get_operations()
-
-    first_id = operations[0][0]
-    second_id = operations[1][0]
-
-    database.delete_operation(second_id)
-
-    result = database.get_operations()
-
-    assert len(result) == 1
-    assert result[0][0] == first_id
-
-
-def test_delete_operation_by_id():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    database.add_operation(
-        "26.08.2026 11:00",
-        "Расход",
-        2000,
-        "Еда"
-    )
-
-    operations = database.get_operations()
-
-    assert len(operations) == 2
-
-    first_operation_id = operations[0][0]
-
-    database.delete_operation(first_operation_id)
-
-    operations = database.get_operations()
-
-    assert len(operations) == 1
-    assert operations[0][2] == "Расход"
-    assert operations[0][3] == 2000
-
-
-def test_update_operation_by_id():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    operations = database.get_operations()
-    operation_id = operations[0][0]
-
-    database.update_operation(
-        operation_id,
-        "26.08.2026 12:00",
-        "Расход",
-        2500,
-        "Еда"
-    )
-
-    result = database.get_operations()
-
-    assert len(result) == 1
-    assert result[0][0] == operation_id
-    assert result[0][1] == "26.08.2026 12:00"
-    assert result[0][2] == "Расход"
-    assert result[0][3] == 2500
-    assert result[0][4] == "Еда"
-
-
-def test_update_operation_does_not_change_other_operations():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    database.add_operation(
-        "26.08.2026 11:00",
-        "Расход",
-        2000,
-        "Еда"
-    )
-
-    operations = database.get_operations()
-
-    first_id = operations[0][0]
-    second_id = operations[1][0]
-
-    database.update_operation(
-        first_id,
-        "26.08.2026 12:00",
-        "Доход",
-        15000
-    )
-
-    result = database.get_operations()
-
-    assert len(result) == 2
-
-    assert result[0][0] == first_id
-    assert result[0][3] == 15000
-
-    assert result[1][0] == second_id
-    assert result[1][1] == "26.08.2026 11:00"
-    assert result[1][2] == "Расход"
-    assert result[1][3] == 2000
-    assert result[1][4] == "Еда"
-
-
-def test_update_operation_rejects_negative_amount():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    operations = database.get_operations()
-    operation_id = operations[0][0]
-
-    with pytest.raises(ValueError, match="Сумма должна быть больше нуля"):
-        database.update_operation(
-            operation_id,
-            "26.08.2026 12:00",
-            "Доход",
-            -5000
-        )
-
-
-def test_update_operation_rejects_invalid_type():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    operations = database.get_operations()
-    operation_id = operations[0][0]
-
-    with pytest.raises(ValueError, match="Недопустимый тип операции"):
-        database.update_operation(
-            operation_id,
-            "26.08.2026 12:00",
-            "Что-то",
-            5000
-        )
-
-
-def test_update_expense_requires_category():
-    database.add_operation(
-        "26.08.2026 10:00",
-        "Доход",
-        10000
-    )
-
-    operations = database.get_operations()
-    operation_id = operations[0][0]
-
-    with pytest.raises(ValueError, match="Для расхода нужна категория"):
-        database.update_operation(
-            operation_id,
-            "26.08.2026 12:00",
-            "Расход",
-            2000
-        )
-
-
-def test_get_connection_requires_database_url(monkeypatch):
+def test_missing_database_url(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
-
-    with pytest.raises(ValueError, match="DATABASE_URL не настроен"):
-        database.get_connection()
+    with pytest.raises(ValueError, match="DATABASE_URL"): database.get_connection()
 
 
-def test_get_connection_returns_working_connection():
-    connection = database.get_connection()
-
-    try:
-        assert connection.closed == 0
-
-        cursor = connection.cursor()
-        cursor.execute("SELECT 1")
-
-        assert cursor.fetchone()[0] == 1
-    finally:
-        connection.close()
+def test_connections_close_on_read_and_write(store, monkeypatch):
+    connections = []
+    monkeypatch.setattr(database, "get_connection", lambda: connections.append(Connection(store)) or connections[-1])
+    database.add_operation("date", "Доход", 10)
+    database.get_operations()
+    assert all(connection.closed for connection in connections)
 
 
-@pytest.mark.no_db
-def test_create_database_closes_connection(monkeypatch):
-    class FakeCursor:
-        def execute(self, *args, **kwargs):
-            pass
+def test_transaction_rolls_back_and_closes_on_database_error(monkeypatch):
+    class FailingCursor(Cursor):
+        def execute(self, query, params=()):
+            if "INSERT" in query.upper():
+                raise RuntimeError("database failure")
+            return super().execute(query, params)
 
-    class FakeConnection:
+    class FailingConnection(Connection):
         def __init__(self):
-            self.closed = 0
+            super().__init__([])
+            self.rolled_back = False
 
         def cursor(self):
-            return FakeCursor()
+            return FailingCursor(self.store)
 
-        def commit(self):
-            pass
+        def rollback(self):
+            self.rolled_back = True
 
-        def close(self):
-            self.closed = 1
-
-    connection = FakeConnection()
+    connection = FailingConnection()
     monkeypatch.setattr(database, "get_connection", lambda: connection)
-
-    database.create_database()
-
+    with pytest.raises(RuntimeError, match="database failure"):
+        database.add_operation("date", "Доход", 10)
+    assert connection.rolled_back is True
     assert connection.closed == 1

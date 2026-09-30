@@ -18,49 +18,17 @@ from finance import (
 
 from storage import load_operations_from_database
 
-operations, balance = load_operations_from_database()
-
-
 def show_balance(balance):
     print(f"Ваш баланс: {format_money(balance)} тенге")
 
 def format_operation(operation):
-    if "|" in operation:
-        parts = [part.strip() for part in operation.split("|")]
-
-        date = parts[0]
-        operation_data = parts[1]
-
-        category = ""
-
-        if len(parts) > 2 and parts[2].startswith("Категория:"):
-            category = parts[2]
-
-        if operation_data.startswith("Доход:"):
-            amount = float(operation_data.split("+")[1].split(" тенге")[0].replace(" ", "") )
-            result = f"{date} | Доход: +{format_money(amount)} тенге"
-
-        elif operation_data.startswith("Расход:"):
-            amount = float(operation_data.split("-")[1].split(" тенге")[0])
-            result = f"{date} | Расход: -{format_money(amount)} тенге"
-
-        else:
-            return operation
-
-        if category:
-            result += f" | {category}"
-
-        return result
-
-    if operation.startswith("Доход:"):
-        amount = float(operation.split("+")[1].split(" тенге")[0])
-        return f"Доход: +{format_money(amount)} тенге"
-
-    elif operation.startswith("Расход:"):
-        amount = float(operation.split("-")[1].split(" тенге")[0])
-        return f"Расход: -{format_money(amount)} тенге"
-
-    return operation
+    operation_type, amount, category = parse_operation(operation)
+    if operation_type is None:
+        return operation
+    prefix = f"{operation.split('|', 1)[0].strip()} | " if "|" in operation else ""
+    sign = "+" if operation_type == "Доход" else "-"
+    result = f"{prefix}{operation_type}: {sign}{format_money(amount)} тенге"
+    return f"{result} | Категория: {category}" if category else result
 
 
 def show_history(operations):

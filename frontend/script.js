@@ -1,723 +1,88 @@
 const API_URL = window.location.origin;
-
 let editingOperationId = null;
 let currentPeriod = "all";
+const LOCAL_DATA_KEY = "finance_tracker_data_v2";
+const EXPENSE_CATEGORIES = ["Еда", "Транспорт", "Дом", "Развлечения", "Здоровье", "Другое"];
+const INCOME_CATEGORIES = ["Зарплата", "Фриланс", "Бизнес", "Инвестиции", "Другое"];
 
-const LOCAL_DATA_KEY = "finance_tracker_data";
+const $ = (id) => document.getElementById(id);
+const formatMoney = (amount) => `${new Intl.NumberFormat("ru-RU").format(Number(amount) || 0)} ₸`;
+const localData = () => { try { return JSON.parse(localStorage.getItem(LOCAL_DATA_KEY)); } catch (_) { return null; } };
+const saveLocalData = (data) => localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(data));
 
-function saveLocalData(data) {
-    localStorage.setItem(
-        LOCAL_DATA_KEY,
-        JSON.stringify(data)
-    );
+async function request(path, options = {}) {
+    const response = await fetch(`${API_URL}${path}`, { headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
+    if (!response.ok) { let message = "Ошибка запроса"; try { message = (await response.json()).detail || message; } catch (_) {} throw new Error(message); }
+    return response.json();
 }
 
-function getLocalData() {
-    const data = localStorage.getItem(LOCAL_DATA_KEY);
-
-    if (!data) {
-        return null;
-    }
-
-    return JSON.parse(data);
-}
-
-const saveOperationBtn =
-    document.getElementById("save-operation-btn");
-
-const operationFormTitle =
-    document.getElementById("operation-form-title");
-
-async function loadBalance() {
-    const response = await fetch(`${API_URL}/balance`);
-
-    if (!response.ok) {
-        throw new Error("Не удалось загрузить баланс");
-    }
-
-    const data = await response.json();
-
-    document.getElementById("balance").textContent =
-        formatMoney(data.balance);
-}
-
-
-async function loadStatistics() {
-    const response = await fetch(`${API_URL}/statistics`);
-
-    if (!response.ok) {
-        throw new Error("Не удалось загрузить статистику");
-    }
-
-    const data = await response.json();
-
-    document.getElementById("total-income").textContent =
-        formatMoney(data.total_income);
-
-    document.getElementById("total-expense").textContent =
-        formatMoney(data.total_expense);
-
-    const categoriesContainer =
-        document.getElementById("categories-list");
-
-    categoriesContainer.innerHTML = "";
-
-    const categories = data.categories;
-
-    const totalCategoriesExpense = Object.values(categories).reduce((sum, amount) => sum + amount, 0);
-
-    renderExpensesChart(categories);
-
-    if (Object.keys(categories).length === 0) {
-
-        categoriesContainer.innerHTML = `
-            <p class="empty-message">
-                Расходов по категориям пока нет.
-            </p>
-        `;
-
-    } else {
-
-        Object.entries(categories).forEach(([category, amount]) => {
-
-            const percentage = (amount / totalCategoriesExpense) * 100;
-
-            const element = document.createElement("div");
-
-            element.className = "category-item";
-
-            element.innerHTML = `
-                <span class="category-name">
-                    ${category}
-                </span>
-
-                <span class="category-amount">
-                    -${formatMoney(amount)} (${percentage.toFixed(0)}%)
-                </span>
-            `;
-
-        categoriesContainer.appendChild(element);
-    });
-}
-}
-
-
-async function loadOperations() {
-
-    const response = await fetch(
-        `${API_URL}/operations?period=${currentPeriod}`
-    );
-
-    if (!response.ok) {
-        throw new Error("Не удалось загрузить операции");
-    }
-
-    const operations = await response.json();
-
-    console.log("OPERATIONS:", operations);
-
-    const container = document.getElementById("operations-list");
-
-    console.log("LOAD OPERATIONS: container найден");
-
-    container.innerHTML = "";
-
-    if (operations.length === 0) {
-        container.innerHTML = `
-            <p class="empty-message">
-                Операций пока нет.
-            </p>
-        `;
-
-        return;
-    }
-
-    operations.forEach(operation => {
-
-        console.log("OPERATION:", operation);
-        
-        const element = document.createElement("div");
-
-        element.className = "operation";
-
-        const sign = operation.type === "Доход" ? "+" : "-";
-
-        const amountClass =
-            operation.type === "Доход"
-                ? "operation-income"
-                : "operation-expense";
-
-        element.innerHTML = `
-            <div class="operation-info">
-
-                <span class="operation-type">
-                    ${operation.type}
-                </span>
-
-                <span class="operation-date">
-                    ${operation.date}
-                </span>
-
-                ${
-                    operation.category
-                        ? `<span class="operation-category">
-                            Категория: ${operation.category}
-                           </span>`
-                        : ""
-                }
-
-            </div>
-
-            <div class="operation-actions">
-
-                <div class="operation-amount ${amountClass}">
-                    ${sign}${formatMoney(operation.amount)}
-                </div>
-
-                <button class="edit-operation-btn">
-                    ✏️
-                </button>
-
-                <button class="delete-operation-btn">
-                    🗑️
-                </button>
-
-            </div>
-        `;
-
-        const editButton =
-            element.querySelector(".edit-operation-btn");
-
-        editButton.addEventListener("click", () => {
-            editOperation(operation);
-        });
-
-        const deleteButton =
-            element.querySelector(".delete-operation-btn");
-
-        deleteButton.addEventListener("click", () => {
-            deleteOperation(operation.id);
-        });
-
-        container.appendChild(element);
+function renderCategories(categories) {
+    const container = $("categories-list"); container.replaceChildren();
+    const entries = Object.entries(categories || {});
+    if (!entries.length) { container.textContent = "Расходов по категориям пока нет."; return; }
+    const total = entries.reduce((sum, [, amount]) => sum + Number(amount), 0);
+    entries.forEach(([name, amount]) => {
+        const item = document.createElement("div"); item.className = "category-item";
+        item.innerHTML = `<span class="category-name"></span><span class="category-amount"></span>`;
+        item.querySelector(".category-name").textContent = name;
+        item.querySelector(".category-amount").textContent = `-${formatMoney(amount)} (${Math.round(amount / total * 100)}%)`;
+        container.appendChild(item);
     });
 }
 
-
-function formatMoney(amount) {
-    return new Intl.NumberFormat("ru-RU").format(amount) + " ₸";
+function renderChart(categories) {
+    const canvas = $("expenses-chart"); if (!canvas || !canvas.getContext) return;
+    const context = canvas.getContext("2d"); context.clearRect(0, 0, canvas.width, canvas.height);
+    const entries = Object.entries(categories || {}); if (!entries.length) return;
+    const max = Math.max(...entries.map(([, value]) => Number(value))); const width = canvas.width / entries.length;
+    entries.forEach(([name, value], index) => { const height = Number(value) / max * 150; context.fillStyle = "#2563eb"; context.fillRect(index * width + 12, 180 - height, width - 24, height); context.fillStyle = "#374151"; context.font = "12px sans-serif"; context.fillText(name.slice(0, 12), index * width + 12, 198); });
 }
 
-async function loadDashboardFromData(data) {
-
-    document.getElementById("balance").textContent =
-        formatMoney(data.balance);
-
-    document.getElementById("total-income").textContent =
-        formatMoney(data.total_income);
-
-    document.getElementById("total-expense").textContent =
-        formatMoney(data.total_expense);
-
-    const categoriesContainer =
-        document.getElementById("categories-list");
-
-    categoriesContainer.innerHTML = "";
-
-    const categories = data.categories || {};
-
-    const periodNames = {
-        all: "За всё время",
-        today: "Сегодня",
-        week: "За неделю",
-        month: "За месяц"
-    };
-    
-    const periodSummary =
-        document.getElementById("period-summary-content");
-    
-    const periodBalance =
-        data.total_income - data.total_expense;
-    
-    periodSummary.innerHTML = `
-        <p><strong>${periodNames[currentPeriod]}</strong></p>
-        <p>Доходы: ${formatMoney(data.total_income)}</p>
-        <p>Расходы: ${formatMoney(data.total_expense)}</p>
-        <p>Баланс: ${formatMoney(periodBalance)}</p>
-        <p>Операций: ${data.operations.length}</p>
-    `;
-
-    renderExpensesChart(categories);
-
-    if (Object.keys(categories).length === 0) {
-
-        categoriesContainer.innerHTML = `
-            <p class="empty-message">
-                Расходов по категориям пока нет.
-            </p>
-        `;
-
-    } else {
-
-        Object.entries(categories).forEach(([category, amount]) => {
-
-            const totalCategoriesExpense = Object.values(categories).reduce((sum, amount) => sum + amount, 0);
-            const percentage = (amount / totalCategoriesExpense) * 100;
-
-            const element = document.createElement("div");
-
-            element.className = "category-item";
-
-            element.innerHTML = `
-                <span class="category-name">
-                    ${category}
-                </span>
-
-                <span class="category-amount">
-                    -${formatMoney(amount)} (${percentage.toFixed(0)}%)
-                </span>
-            `;
-
-            categoriesContainer.appendChild(element);
-        });
-    }
-
-    const container =
-        document.getElementById("operations-list");
-
-    container.innerHTML = "";
-
-    const operations = data.operations || [];
-
-    if (operations.length === 0) {
-
-        container.innerHTML = `
-            <p class="empty-message">
-                Операций пока нет.
-            </p>
-        `;
-
-        return;
-    }
-
-    operations.forEach(operation => {
-
-        const element = document.createElement("div");
-
-        element.className = "operation";
-
-        const sign =
-            operation.type === "Доход" ? "+" : "-";
-
-        const amountClass =
-            operation.type === "Доход"
-                ? "operation-income"
-                : "operation-expense";
-
-        element.innerHTML = `
-            <div class="operation-info">
-
-                <span class="operation-type">
-                    ${operation.type}
-                </span>
-
-                <span class="operation-date">
-                    ${operation.date}
-                </span>
-
-                ${
-                    operation.category
-                        ? `<span class="operation-category">
-                            Категория: ${operation.category}
-                           </span>`
-                        : ""
-                }
-
-            </div>
-
-            <div class="operation-actions">
-
-                <div class="operation-amount ${amountClass}">
-                    ${sign}${formatMoney(operation.amount)}
-                </div>
-
-                <button class="edit-operation-btn">
-                    ✏️
-                </button>
-
-                <button class="delete-operation-btn">
-                    🗑️
-                </button>
-
-            </div>
-        `;
-
-        const editButton =
-            element.querySelector(".edit-operation-btn");
-
-        editButton.addEventListener("click", () => {
-            editOperation(operation);
-        });
-
-        const deleteButton =
-            element.querySelector(".delete-operation-btn");
-
-        deleteButton.addEventListener("click", () => {
-            deleteOperation(operation.id);
-        });
-
-        container.appendChild(element);
+function renderOperations(operations) {
+    const container = $("operations-list"); container.replaceChildren();
+    if (!operations.length) { container.textContent = "Операций пока нет."; return; }
+    operations.forEach((operation) => {
+        const element = document.createElement("div"); element.className = "operation";
+        const info = document.createElement("div"); info.className = "operation-info";
+        info.innerHTML = `<span class="operation-type"></span><span class="operation-date"></span><span class="operation-category"></span>`;
+        info.querySelector(".operation-type").textContent = operation.type;
+        info.querySelector(".operation-date").textContent = operation.date;
+        info.querySelector(".operation-category").textContent = operation.category ? `Категория: ${operation.category}` : "";
+        const actions = document.createElement("div"); actions.className = "operation-actions";
+        actions.innerHTML = `<strong class="operation-amount"></strong><button type="button" class="edit-operation-btn" aria-label="Редактировать">✏️</button><button type="button" class="delete-operation-btn" aria-label="Удалить">🗑️</button>`;
+        const amount = actions.querySelector(".operation-amount"); amount.textContent = `${operation.type === "Доход" ? "+" : "-"}${formatMoney(operation.amount)}`; amount.classList.add(operation.type === "Доход" ? "operation-income" : "operation-expense");
+        actions.querySelector(".edit-operation-btn").onclick = () => editOperation(operation);
+        actions.querySelector(".delete-operation-btn").onclick = () => deleteOperation(operation.id);
+        element.append(info, actions); container.appendChild(element);
     });
+}
+
+function renderDashboard(data) {
+    $("balance").textContent = formatMoney(data.balance); $("total-income").textContent = formatMoney(data.total_income); $("total-expense").textContent = formatMoney(data.total_expense);
+    $("period-summary-content").innerHTML = `<p><strong>${({all:"За всё время", today:"Сегодня", week:"За неделю", month:"За месяц"})[currentPeriod]}</strong></p><p>Доходы: ${formatMoney(data.total_income)}</p><p>Расходы: ${formatMoney(data.total_expense)}</p><p>Баланс: ${formatMoney(data.total_income - data.total_expense)}</p><p>Операций: ${data.operations.length}</p>`;
+    renderCategories(data.categories); renderChart(data.categories); renderOperations(data.operations);
 }
 
 async function loadDashboard() {
-
-    try {
-
-        const [balanceResponse, statisticsResponse, operationsResponse] =
-            await Promise.all([
-                fetch(`${API_URL}/balance`),
-                fetch(`${API_URL}/statistics?period=${currentPeriod}`),
-                fetch(`${API_URL}/operations?period=${currentPeriod}`)
-            ]);
-
-        if (
-            !balanceResponse.ok ||
-            !statisticsResponse.ok ||
-            !operationsResponse.ok
-        ) {
-            throw new Error("Не удалось загрузить данные");
-        }
-
-        const balance = await balanceResponse.json();
-        const statistics = await statisticsResponse.json();
-        const operations = await operationsResponse.json();
-
-        const dashboardData = {
-            balance: balance.balance,
-            total_income: statistics.total_income,
-            total_expense: statistics.total_expense,
-            categories: statistics.categories,
-            operations: operations
-        };
-
-        saveLocalData(dashboardData);
-
-        console.log("Данные сохранены локально:", dashboardData);
-
-        await loadDashboardFromData(dashboardData);
-
-    } catch (error) {
-
-        console.warn(
-            "API недоступен. Загружаем локальные данные."
-        );
-
-        console.error("LOAD DASHBOARD ERROR:", error);
-
-        const localData = getLocalData();
-
-        if (localData) {
-            await loadDashboardFromData(localData);
-        } else {
-            document.getElementById("operations-list").innerHTML = `
-                <p class="empty-message">
-                    Нет сохранённых данных.
-                </p>
-            `;
-        }
-    }
+    try { const [balance, statistics, operations] = await Promise.all([request("/balance"), request(`/statistics?period=${currentPeriod}`), request(`/operations?period=${currentPeriod}`)]); const data = { balance: balance.balance, ...statistics, operations }; saveLocalData(data); renderDashboard(data); }
+    catch (error) { const data = localData(); if (data) renderDashboard(data); else $("operations-list").textContent = `Не удалось загрузить данные: ${error.message}`; }
 }
 
-
-async function deleteOperation(operationId) {
-
-    const confirmed = confirm(
-        "Вы действительно хотите удалить эту операцию?"
-    );
-
-    if (!confirmed) {
-        return;
-    }
-
-    try {
-
-        const response = await fetch(
-            `${API_URL}/operations/${operationId}`,
-            {
-                method: "DELETE"
-            }
-        );
-
-        if (!response.ok) {
-            throw new Error("Не удалось удалить операцию");
-        }
-
-        await loadDashboard();
-
-    } catch (error) {
-
-        console.error(error);
-
-        alert("Ошибка при удалении операции");
-    }
-}
-
-
-function editOperation(operation) {
-
-    editingOperationId = operation.id;
-
-    document.getElementById("operation-form-title").textContent =
-        "Редактировать операцию";
-
-    document.getElementById("save-operation-btn").textContent =
-        "Сохранить изменения";
-    
-    const operationForm =
-        document.getElementById("operation-form");
-
-    const operationType =
-        document.getElementById("operation-type");
-
-    const operationAmount =
-        document.getElementById("operation-amount");
-
-    const operationCategory =
-        document.getElementById("operation-category");
-
-    operationType.value = operation.type;
-    operationAmount.value = operation.amount;
-
-    if (operation.category) {
-        operationCategory.value = operation.category;
-    }
-
-    operationForm.classList.remove("hidden");
-}
+function resetForm() { editingOperationId = null; $("operation-form-title").textContent = "Новая операция"; $("save-operation-btn").textContent = "Сохранить"; $("operation-form").classList.add("hidden"); $("operation-amount").value = ""; }
+function editOperation(operation) { editingOperationId = operation.id; $("operation-form-title").textContent = "Редактировать операцию"; $("save-operation-btn").textContent = "Сохранить изменения"; $("operation-type").value = operation.type; updateCategoryOptions(); $("operation-amount").value = operation.amount; $("operation-category").value = operation.category || ""; $("operation-form").classList.remove("hidden"); }
+async function deleteOperation(id) { if (!confirm("Удалить операцию?")) return; try { await request(`/operations/${id}`, { method: "DELETE" }); await loadDashboard(); } catch (error) { alert(error.message); } }
 
 document.addEventListener("DOMContentLoaded", () => {
-
-    loadDashboard();
-
-    const addOperationBtn =
-        document.getElementById("add-operation-btn");
-
-    const operationForm =
-        document.getElementById("operation-form");
-
-    const cancelOperationBtn =
-        document.getElementById("cancel-operation-btn");
-
-
-    addOperationBtn.addEventListener("click", () => {
-        operationForm.classList.remove("hidden");
-    });
-
-
-    const operationType = document.getElementById("operation-type");
-    const operationCategory = document.getElementById("operation-category");
-
-    operationType.addEventListener("change", () => {
-        if (operationType.value === "Доход") {
-            operationCategory.innerHTML = `
-                <option value="Зарплата">Зарплата</option>
-                <option value="Фриланс">Фриланс</option>
-                <option value="Бизнес">Бизнес</option>
-                <option value="Инвестиции">Инвестиции</option>
-                <option value="Другое">Другое</option>
-            `;
-        } else {
-            operationCategory.innerHTML = `
-                <option value="Еда">Еда</option>
-                <option value="Транспорт">Транспорт</option>
-                <option value="Дом">Дом</option>
-                <option value="Развлечения">Развлечения</option>
-                <option value="Здоровье">Здоровье</option>
-                <option value="Другое">Другое</option>
-            `;
-        }
-    });
-
-    operationType.dispatchEvent(new Event("change"));
-
-    cancelOperationBtn.addEventListener("click", () => {
-        operationForm.classList.add("hidden");
-
-        editingOperationId = null;
-
-        document.getElementById("operation-amount").value = "";
-
-        document.getElementById("operation-form-title").textContent =
-            "Новая операция";
-
-        document.getElementById("save-operation-btn").textContent =
-            "Сохранить";
-    });
-
-
-    saveOperationBtn.addEventListener("click", async () => {
-
-        const type =
-            document.getElementById("operation-type").value;
-
-        const amount =
-            Number(document.getElementById("operation-amount").value);
-
-        const category =
-            document.getElementById("operation-category").value;
-
-        const operation = {
-            date: new Date().toLocaleString("ru-RU"),
-            operation_type: type,
-            amount: amount,
-            category: category
-        };
-
-        try {
-
-            let response;
-
-            if (editingOperationId !== null) {
-
-                response = await fetch(
-                    `${API_URL}/operations/${editingOperationId}`,
-                    {
-                        method: "PUT",
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify(operation)
-                    }
-                );
-
-            } else {
-
-                response = await fetch(
-                    `${API_URL}/operations`,
-                    {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify(operation)
-                    }
-                );
-            }
-
-            if (!response.ok) {
-                throw new Error("Не удалось добавить операцию");
-            }
-
-            operationForm.classList.add("hidden");
-
-            editingOperationId = null;
-
-            document.getElementById("operation-amount").value = "";
-
-            document.getElementById("operation-category").value = "Еда";
-
-            document.getElementById("operation-type").value = "Доход";
-
-            document.getElementById("operation-form-title").textContent =
-                "Новая операция";
-
-            document.getElementById("save-operation-btn").textContent =
-                "Сохранить";
-
-            await loadDashboard();
-
-        } catch (error) {
-
-            console.error(error);
-
-            alert("Ошибка при добавлении операции");
-        }
-    });
-
-    const filterButtons =
-    document.querySelectorAll(".filter-btn");
-
-filterButtons.forEach(button => {
-
-    button.addEventListener("click", async () => {
-
-        currentPeriod = button.dataset.period;
-
-        filterButtons.forEach(btn => {
-            btn.classList.remove("active");
-        });
-
-        button.classList.add("active");
-
-        await loadDashboard();
-    });
-
+    loadDashboard(); $("add-operation-btn").onclick = () => { resetForm(); $("operation-form").classList.remove("hidden"); updateCategoryOptions(); }; $("cancel-operation-btn").onclick = resetForm;
+    $("operation-type").onchange = updateCategoryOptions;
+    $("save-operation-btn").onclick = async () => { const type = $("operation-type").value; const payload = { date: new Date().toLocaleString("ru-RU", { hour12: false }), operation_type: type, amount: Number($("operation-amount").value), category: $("operation-category").value || null }; try { await request(editingOperationId ? `/operations/${editingOperationId}` : "/operations", { method: editingOperationId ? "PUT" : "POST", body: JSON.stringify(payload) }); resetForm(); await loadDashboard(); } catch (error) { alert(error.message); } };
+    document.querySelectorAll(".filter-btn").forEach((button) => button.onclick = () => { document.querySelectorAll(".filter-btn").forEach((item) => item.classList.remove("active")); button.classList.add("active"); currentPeriod = button.dataset.period; loadDashboard(); }); $("export-csv-btn").onclick = () => { window.location.href = "/export/csv"; };
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js");
 });
 
-});
-
-const exportCsvBtn = document.getElementById("export-csv-btn");
-
-exportCsvBtn.addEventListener("click", () => {
-    window.location.href = `${API_URL}/export/csv`;
-});
-
-let expensesChart = null;
-
-function renderExpensesChart(categories) {
-
-    const canvas = document.getElementById("expenses-chart");
-
-    if (!canvas) {
-        return;
-    }
-
-    const labels = Object.keys(categories);
-    const values = Object.values(categories);
-
-    if (expensesChart) {
-        expensesChart.destroy();
-    }
-
-    expensesChart = new Chart(canvas, {
-        type: "doughnut",
-
-        data: {
-            labels: labels,
-
-            datasets: [{
-                data: values
-            }]
-        },
-
-        options: {
-            responsive: true,
-
-            plugins: {
-                legend: {
-                    position: "bottom"
-                }
-            }
-        }
-    });
-}
-
-if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-        navigator.serviceWorker
-            .register("/service-worker.js")
-            .then(registration => {
-                console.log(
-                    "Service Worker зарегистрирован:",
-                    registration.scope
-                );
-            })
-            .catch(error => {
-                console.error(
-                    "Ошибка регистрации Service Worker:",
-                    error
-                );
-            });
-    });
+function updateCategoryOptions() {
+    const type = $("operation-type").value;
+    const selected = $("operation-category").value;
+    $("operation-category").replaceChildren(...(type === "Доход" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map((category) => new Option(category, category)));
+    if ([...$("operation-category").options].some((option) => option.value === selected)) $("operation-category").value = selected;
 }

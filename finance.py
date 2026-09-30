@@ -64,30 +64,9 @@ def get_category_expenses(operations):
     categories = {}
 
     for operation in operations:
-        if "|" not in operation:
-            continue
-
-        parts = [part.strip() for part in operation.split("|")]
-
-        if len(parts) < 2:
-            continue
-
-        operation_data = parts[1]
-
-        if not operation_data.startswith("Расход:"):
-            continue
-
-        amount = float(
-            operation_data.split("-")[1].split(" тенге")[0]
-        )
-
-        if len(parts) > 2 and parts[2].startswith("Категория:"):
-            category = parts[2].replace("Категория:", "").strip()
-
-            if category not in categories:
-                categories[category] = 0
-
-            categories[category] += amount
+        operation_type, amount, category = parse_operation(operation)
+        if operation_type == "Расход" and category:
+            categories[category] = categories.get(category, 0) + amount
 
     return categories
 

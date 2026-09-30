@@ -108,7 +108,7 @@ def add_expense(balance, operations):
     category = choose_category()
 
     operation = (
-        f"{date} | Расход: -{expense} тенге "
+        f"{date} | Расход: -{format_money(expense)} тенге "
         f"| Категория: {category}"
     )
 
@@ -156,15 +156,16 @@ def edit_operation(operations):
             date = parts[0]
             operation_data = parts[1]
 
+            if len(parts) > 2 and parts[2].startswith("Категория:"):
+                category = parts[2].replace("Категория:", "").strip()
+
             if operation_data.startswith("Доход:"):
                 operations[choice - 1] = (
                     f"{date} | Доход: +{format_money(new_amount)} тенге"
+                    + (f" | Категория: {category}" if category else "")
                 )
 
             elif operation_data.startswith("Расход:"):
-                if len(parts) > 2 and parts[2].startswith("Категория:"):
-                    category = parts[2].replace("Категория:", "").strip()
-
                 print(f"\nТекущая категория: {category}")
                 print("Нажмите Enter, чтобы оставить её.")
                 print("Или выберите новую категорию:")
