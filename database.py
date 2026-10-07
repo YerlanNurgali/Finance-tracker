@@ -93,7 +93,7 @@ def create_database():
                 )
             """)
 
-            # 2. Operations table
+            # 2. Operations table — create fresh with user_id
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
                     id BIGSERIAL PRIMARY KEY,
@@ -103,6 +103,20 @@ def create_database():
                     amount NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
                     category TEXT
                 )
+            """)
+
+            # 2b. Safe migration: add user_id column if it's missing from an
+            # existing pre-v2 database (does nothing on fresh installs)
+            cursor.execute(f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = '{TABLE_NAME}' AND column_name = 'user_id'
+                    ) THEN
+                        ALTER TABLE {TABLE_NAME} ADD COLUMN user_id BIGINT;
+                    END IF;
+                END $$;
             """)
 
             # 3. Budgets table
