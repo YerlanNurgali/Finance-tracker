@@ -193,3 +193,92 @@ select:focus, input:focus { border-color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Auth Modal & User Badge */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; backdrop-filter: blur(4px); }
+.modal-overlay[hidden] { display: none !important; }
+.auth-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; width: 100%; max-width: 400px; box-shadow: var(--shadow); animation: fade-up 200ms ease both; }
+.auth-tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.auth-tab { background: none; border: none; font-size: 1rem; font-weight: 600; color: var(--text-secondary); cursor: pointer; padding: 6px 12px; border-radius: 8px; transition: background 0.2s, color 0.2s; }
+.auth-tab.active { background: var(--border); color: var(--text); }
+.auth-form { display: flex; flex-direction: column; gap: 14px; }
+.auth-error { color: var(--danger); font-size: 0.85rem; min-height: 20px; }
+.user-badge { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--text); background: var(--border); padding: 6px 12px; border-radius: 20px; }
+.user-badge button { background: none; border: none; color: var(--danger); cursor: pointer; font-weight: 600; font-size: 0.85rem; }
+
+/* Budgets */
+.budgets-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.budget-item { background: var(--background); border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.budget-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
+.budget-progress-bg { background: var(--border); border-radius: 6px; height: 10px; width: 100%; overflow: hidden; }
+.budget-progress-fill { background: var(--success); height: 100%; transition: width 0.3s ease; }
+.budget-progress-fill.exceeded { background: var(--danger); }
+.budget-footer { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary); }
+
+/* Goals */
+.goals-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.goal-item { background: var(--background); border: 1px solid var(--border); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.goal-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
+.goal-progress-bg { background: var(--border); border-radius: 6px; height: 10px; width: 100%; overflow: hidden; }
+.goal-progress-fill { background: #3b82f6; height: 100%; transition: width 0.3s ease; }
+.goal-footer { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary); }
+
+/* Mobile Bottom Navigation */
+.mobile-nav { display: none; }
+
+@media (max-width: 820px) {
+    .mobile-nav {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: space-around;
+        padding: 8px 4px calc(8px + env(safe-area-inset-bottom, 0px));
+        z-index: 999;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+    }
+    .mobile-nav-item {
+        background: none;
+        border: none;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        cursor: pointer;
+        padding: 6px;
+        min-width: 44px;
+        min-height: 44px;
+    }
+    .mobile-nav-item.active {
+        color: var(--primary, #3b82f6);
+        font-weight: 600;
+    }
+    .mobile-nav-icon {
+        font-size: 1.2rem;
+    }
+    body {
+        padding-bottom: 70px;
+    }
+    .tab-content[hidden] { display: none; }
+    .tab-content:not([hidden]) { display: block; }
+}
+
+@media (min-width: 821px) {
+    .tab-content[hidden] { display: block; }
+}
+
+/* Financial Calendar */
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 12px; text-align: center; }
+.calendar-day-header { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); padding: 4px 0; }
+.calendar-cell { background: var(--background); border: 1px solid var(--border); border-radius: 8px; min-height: 44px; padding: 6px 2px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; cursor: pointer; transition: border-color 0.2s; }
+.calendar-cell:hover { border-color: var(--primary, #3b82f6); }
+.calendar-cell.has-ops { background: var(--surface); font-weight: 600; border-color: var(--success); }
+.calendar-cell-date { font-size: 0.85rem; }
+.calendar-cell-dot { width: 6px; height: 6px; background: var(--success); border-radius: 50%; }
+.calendar-cell.empty { background: transparent; border: none; cursor: default; }
+.calendar-details { margin-top: 14px; padding: 12px; background: var(--background); border-radius: 10px; border: 1px solid var(--border); font-size: 0.9rem; }

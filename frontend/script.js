@@ -8,6 +8,7 @@ const LOCALES = { kk: "kk-KZ", en: "en-US", ru: "ru-RU" };
 const VALID_THEMES = ["light", "dark"];
 
 let editingOperationId = null;
+let editingBudgetId = null;
 let currentPeriod = "all";
 let currentDashboard = null;
 let notificationTimer = null;
@@ -130,11 +131,64 @@ function updateCategoryFilterOptions() {
     select.value = selected;
 }
 
+const TOKEN_KEY = "finance_tracker_token";
+const USER_EMAIL_KEY = "finance_tracker_email";
+let authMode = "login";
+
+function showAuthModal() {
+    $("auth-modal").hidden = false;
+    $("auth-email").focus();
+}
+
+function hideAuthModal() {
+    $("auth-modal").hidden = true;
+    $("auth-error").textContent = "";
+    $("auth-password").value = "";
+}
+
+function renderUserBadge() {
+    const area = $("user-auth-area");
+    const email = localStorage.getItem(USER_EMAIL_KEY);
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!area) return;
+    if (token && email) {
+        area.replaceChildren();
+        const badge = document.createElement("div");
+        badge.className = "user-badge";
+        badge.innerHTML = `<span>👤 ${email}</span><button type="button" id="logout-btn">Выйти</button>`;
+        area.appendChild(badge);
+        $("logout-btn").onclick = () => {
+            localStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(USER_EMAIL_KEY);
+            renderUserBadge();
+            showAuthModal();
+        };
+    } else {
+        area.replaceChildren();
+        const loginBtn = document.createElement("button");
+        loginBtn.className = "secondary-button";
+        loginBtn.style.padding = "6px 14px";
+        loginBtn.textContent = "Войти / Регистрация";
+        loginBtn.onclick = () => showAuthModal();
+        area.appendChild(loginBtn);
+    }
+}
+
 async function request(path, options = {}) {
-    const response = await fetch(`${API_URL}${path}`, {
-        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-        ...options
-    });
+    const token = localStorage.getItem(TOKEN_KEY);
+    const headers = {
+        "Content-Type": "application/json",
+        ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        ...(options.headers || {})
+    };
+    const response = await fetch(`${API_URL}${path}`, { headers, ...options });
+    if (response.status === 401) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_EMAIL_KEY);
+        renderUserBadge();
+        showAuthModal();
+        throw new Error("Unauthorized");
+    }
     if (!response.ok) {
         let detail = "";
         try {
@@ -284,25 +338,214 @@ function renderDashboard(data) {
         `<p>${i18n.t("periodIncome", { amount: formatMoney(data.total_income) })}</p>`,
         `<p>${i18n.t("periodExpense", { amount: formatMoney(data.total_expense) })}</p>`,
         `<p>${i18n.t("periodBalance", { amount: formatMoney(data.total_income - data.total_expense) })}</p>`,
+        `<p>${i18n.t("savingsRate")}: ${data.savings_rate}%</p>`,
         `<p class="muted">${i18n.t("operationCount", { count: data.operations.length })}</p>`
     ].join("");
     renderCategories(data.categories);
     renderChart(data.categories);
     renderOperations(data.operations);
+    renderCalendar(data.operations);
     updateCategoryFilterOptions();
+}
+
+function renderCalendar(operations) {
+    const grid = $("calendar-grid");
+    if (!grid) return;
+    grid.replaceChildren();
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startDayOfWeek = (firstDay.getDay() + 6) % 7; // Monday = 0
+
+    const daysOfWeek = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    daysOfWeek.forEach(d => {
+        const header = document.createElement("div");
+        header.className = "calendar-day-header";
+        header.textContent = d;
+        grid.appendChild(header);
+    });
+
+    for (let i = 0; i < startDayOfWeek; i++) {
+        const emptyCell = document.createElement("div");
+        emptyCell.className = "calendar-cell empty";
+        grid.appendChild(emptyCell);
+    }
+
+    const opsByDate = {};
+    operations.forEach(op => {
+        const dateMatch = String(op.date).match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+        if (dateMatch) {
+            const dayKey = `${dateMatch[1]}.${dateMatch[2]}.${dateMatch[3]}`;
+            if (!opsByDate[dayKey]) opsByDate[dayKey] = [];
+            opsByDate[dayKey].push(op);
+        }
+    });
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const dayStr = String(day).padStart(2, "0");
+        const monthStr = String(month + 1).padStart(2, "0");
+        const dateKey = `${dayStr}.${monthStr}.${year}`;
+        const dayOps = opsByDate[dateKey] || [];
+
+        const cell = document.createElement("div");
+        cell.className = `calendar-cell ${dayOps.length > 0 ? "has-ops" : ""}`;
+        cell.innerHTML = `
+            <span class="calendar-cell-date">${day}</span>
+            ${dayOps.length > 0 ? '<span class="calendar-cell-dot"></span>' : ''}
+        `;
+        cell.onclick = () => {
+            const details = $("calendar-details");
+            details.hidden = false;
+            if (dayOps.length === 0) {
+                details.textContent = `${dateKey}: ${i18n.t("noOperationsOnDate")}`;
+            } else {
+                const list = dayOps.map(op => `${i18n.translateOperationType(op.type)}: ${formatMoney(op.amount)} (${op.category || '-'})`).join("<br>");
+                details.innerHTML = `<strong>${dateKey}:</strong><br>${list}`;
+            }
+        };
+        grid.appendChild(cell);
+    }
+}
+
+
+async function loadBudgets() {
+    try {
+        const budgets = await request("/budgets");
+        renderBudgets(budgets);
+    } catch (error) {
+        $("budgets-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
+    }
+}
+
+function renderBudgets(budgets) {
+    const container = $("budgets-list");
+    container.replaceChildren();
+    if (!budgets || budgets.length === 0) {
+        container.replaceChildren(createState(i18n.t("noBudgets"), "empty-state"));
+        return;
+    }
+    budgets.forEach(budget => {
+        const item = document.createElement("div");
+        item.className = "budget-item";
+        item.innerHTML = `
+            <div class="budget-header">
+                <span>${i18n.translateCategory(budget.category)}</span>
+                <button class="icon-button" type="button" aria-label="${i18n.t("deleteBudget")}">×</button>
+            </div>
+            <div class="budget-progress-bg">
+                <div class="budget-progress-fill ${budget.exceeded ? 'exceeded' : ''}" style="width: ${Math.min(100, budget.percent)}%"></div>
+            </div>
+            <div class="budget-footer">
+                <span>${i18n.t("spentOf", { spent: formatMoney(budget.spent), amount: formatMoney(budget.amount) })}</span>
+                <span>${budget.percent}%</span>
+            </div>
+        `;
+        item.querySelector("button").onclick = () => deleteBudget(budget.id);
+        container.appendChild(item);
+    });
+}
+
+async function deleteBudget(id) {
+    try {
+        await request(`/budgets/${id}`, { method: "DELETE" });
+        await loadBudgets();
+        showNotification(i18n.t("deletedSuccess"));
+    } catch (error) {
+        showNotification(i18n.translateApiError(error.detail, error.status), "error");
+    }
+}
+
+function updateBudgetCategoryOptions() {
+    const select = $("budget-category");
+    if (!select) return;
+    select.replaceChildren(...EXPENSE_CATEGORIES.map((value) => new Option(i18n.translateCategory(value), value)));
+}
+
+async function loadGoals() {
+    try {
+        const goals = await request("/goals");
+        renderGoals(goals);
+    } catch (error) {
+        $("goals-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
+    }
+}
+
+function renderGoals(goals) {
+    const container = $("goals-list");
+    container.replaceChildren();
+    if (!goals || goals.length === 0) {
+        container.replaceChildren(createState(i18n.t("noGoals"), "empty-state"));
+        return;
+    }
+    goals.forEach(goal => {
+        const item = document.createElement("div");
+        item.className = "goal-item";
+        item.innerHTML = `
+            <div class="goal-header">
+                <span>${goal.title}</span>
+                <button class="icon-button" type="button" aria-label="${i18n.t("deleteGoal")}">×</button>
+            </div>
+            <div class="goal-progress-bg">
+                <div class="goal-progress-fill" style="width: ${goal.progress_percent}%"></div>
+            </div>
+            <div class="goal-footer">
+                <span>${i18n.t("currentAmount")}: ${formatMoney(goal.current_amount)} / ${formatMoney(goal.target_amount)}</span>
+                <span>${goal.progress_percent}%</span>
+            </div>
+            <div class="goal-update" style="display: flex; gap: 8px; margin-top: 8px;">
+                <input type="number" class="goal-progress-input" placeholder="${i18n.t("updateProgress")}" min="0" style="width: 100%;">
+                <button class="secondary-button" type="button">${i18n.t("save")}</button>
+            </div>
+        `;
+        item.querySelector(".icon-button").onclick = () => deleteGoal(goal.id);
+        item.querySelector(".secondary-button").onclick = () => updateGoalProgress(goal.id, item.querySelector('.goal-progress-input').value);
+        container.appendChild(item);
+    });
+}
+
+async function updateGoalProgress(id, value) {
+    try {
+        await request(`/goals/${id}/progress`, {
+            method: "PUT",
+            body: JSON.stringify({ current_amount: Number(value) })
+        });
+        await loadGoals();
+        showNotification(i18n.t("updatedSuccess"));
+    } catch (error) {
+        showNotification(i18n.translateApiError(error.detail, error.status), "error");
+    }
+}
+
+async function deleteGoal(id) {
+    try {
+        await request(`/goals/${id}`, { method: "DELETE" });
+        await loadGoals();
+        showNotification(i18n.t("deletedSuccess"));
+    } catch (error) {
+        showNotification(i18n.translateApiError(error.detail, error.status), "error");
+    }
 }
 
 async function loadDashboard() {
     $("operations-list").replaceChildren(createState(i18n.t("loadingOperations"), "loading-state"));
     try {
-        const [balance, statistics, operations] = await Promise.all([
+        const [balance, statistics, operations, budgets, goals] = await Promise.all([
             request("/balance"),
             request(`/statistics?period=${currentPeriod}`),
-            request(`/operations?period=${currentPeriod}`)
+            request(`/operations?period=${currentPeriod}`),
+            request("/budgets"),
+            request("/goals")
         ]);
         currentDashboard = { balance: balance.balance, ...statistics, operations };
         saveLocalData(currentDashboard);
         renderDashboard(currentDashboard);
+        renderBudgets(budgets);
+        renderGoals(goals);
     } catch (error) {
         const data = localData();
         if (data) {
@@ -361,7 +604,26 @@ function toggleTheme() {
     applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 }
 
+async function loadUserSettings() {
+    try {
+        const user = await request("/auth/me");
+        if ($("settings-email")) $("settings-email").textContent = user.email;
+        if (user.settings) {
+            if ($("settings-language")) $("settings-language").value = user.settings.language || "RU";
+            if ($("settings-theme")) $("settings-theme").value = user.settings.theme || "light";
+            if ($("settings-currency")) $("settings-currency").value = user.settings.currency || "KZT";
+
+            // Sync local state with DB settings
+            if (user.settings.language) changeLanguage(user.settings.language.toLowerCase());
+            if (user.settings.theme) applyTheme(user.settings.theme);
+        }
+    } catch (error) {
+        console.error("Error loading user settings", error);
+    }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+
     i18n.setLanguage(getStoredLanguage());
     applyTheme(getStoredTheme());
     document.querySelectorAll(".language-button").forEach((button) => {
@@ -372,6 +634,69 @@ document.addEventListener("DOMContentLoaded", () => {
     $("add-operation-btn").onclick = () => { resetForm(); openForm(); };
     $("cancel-operation-btn").onclick = resetForm;
     $("cancel-operation-secondary-btn").onclick = resetForm;
+    $("add-budget-btn").onclick = () => {
+        updateBudgetCategoryOptions();
+        $("budget-form").classList.remove("hidden");
+        $("budget-amount").focus();
+    };
+    $("cancel-budget-btn").onclick = () => {
+        $("budget-form").classList.add("hidden");
+        $("budget-amount").value = "";
+    };
+    $("save-budget-btn").onclick = async () => {
+        const payload = {
+            category: $("budget-category").value,
+            amount: Number($("budget-amount").value),
+            period: "month"
+        };
+        try {
+            await request("/budgets", {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+            $("budget-form").classList.add("hidden");
+            $("budget-amount").value = "";
+            await loadBudgets();
+            showNotification(i18n.t("addedSuccess"));
+        } catch (error) {
+            showNotification(i18n.translateApiError(error.detail, error.status), "error");
+        }
+    };
+
+    $("add-goal-btn").onclick = () => {
+        $("goal-form").classList.remove("hidden");
+        $("goal-title").focus();
+    };
+    $("cancel-goal-btn").onclick = () => {
+        $("goal-form").classList.add("hidden");
+        $("goal-title").value = "";
+        $("goal-target").value = "";
+        $("goal-current").value = "0";
+        $("goal-deadline").value = "";
+    };
+    $("save-goal-btn").onclick = async () => {
+        const payload = {
+            title: $("goal-title").value.trim(),
+            target_amount: Number($("goal-target").value),
+            current_amount: Number($("goal-current").value || 0),
+            deadline: $("goal-deadline").value.trim() || null
+        };
+        try {
+            await request("/goals", {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+            $("goal-form").classList.add("hidden");
+            $("goal-title").value = "";
+            $("goal-target").value = "";
+            $("goal-current").value = "0";
+            $("goal-deadline").value = "";
+            await loadGoals();
+            showNotification(i18n.t("addedSuccess"));
+        } catch (error) {
+            showNotification(i18n.translateApiError(error.detail, error.status), "error");
+        }
+    };
     document.querySelectorAll(".type-tab").forEach((button) => {
         button.onclick = () => setFormType(button.dataset.operationType);
     });
@@ -384,13 +709,13 @@ document.addEventListener("DOMContentLoaded", () => {
             category: $("operation-category").value || null
         };
         try {
-            await request(wasEditing ? `/operations/${editingOperationId}` : "/operations", {
+            const res = await request(wasEditing ? `/operations/${editingOperationId}` : "/operations", {
                 method: wasEditing ? "PUT" : "POST",
                 body: JSON.stringify(payload)
             });
             resetForm();
             await loadDashboard();
-            showNotification(i18n.t(wasEditing ? "updatedSuccess" : "addedSuccess"));
+            showNotification(res.notification || i18n.t(wasEditing ? "updatedSuccess" : "addedSuccess"));
         } catch (error) {
             showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
@@ -407,8 +732,121 @@ document.addEventListener("DOMContentLoaded", () => {
         select.onchange = () => currentDashboard && renderOperations(currentDashboard.operations);
     });
     $("operation-search").oninput = () => currentDashboard && renderOperations(currentDashboard.operations);
-    $("export-csv-btn").onclick = () => { window.location.href = "/export/csv"; };
+    $("export-csv-btn").onclick = () => { window.location.href = `/export/csv?period=${currentPeriod}`; };
+    $("export-excel-btn").onclick = () => { window.location.href = `/export/excel?period=${currentPeriod}`; };
+    $("export-pdf-btn").onclick = () => { window.location.href = `/export/pdf?period=${currentPeriod}`; };
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js");
     applyLanguage();
-    loadDashboard();
+
+    // Auth wiring
+    document.querySelectorAll(".auth-tab").forEach((tab) => {
+        tab.onclick = () => {
+            document.querySelectorAll(".auth-tab").forEach((t) => t.classList.remove("active"));
+            tab.classList.add("active");
+            authMode = tab.dataset.authMode;
+            $("auth-submit-btn").textContent = authMode === "login" ? "Войти" : "Создать аккаунт";
+        };
+    });
+
+    $("auth-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const email = $("auth-email").value.trim();
+        const password = $("auth-password").value;
+        const endpoint = authMode === "login" ? "/auth/login" : "/auth/register";
+        try {
+            const data = await request(endpoint, {
+                method: "POST",
+                body: JSON.stringify({ email, password })
+            });
+            localStorage.setItem(TOKEN_KEY, data.access_token);
+            localStorage.setItem(USER_EMAIL_KEY, data.email || email);
+            hideAuthModal();
+            renderUserBadge();
+            showNotification(authMode === "login" ? "Успешный вход!" : "Аккаунт успешно создан!");
+            loadDashboard();
+        } catch (error) {
+            $("auth-error").textContent = error.detail || "Ошибка аутентификации";
+        }
+    };
+
+    renderUserBadge();
+    if (!localStorage.getItem(TOKEN_KEY)) {
+        showAuthModal();
+    } else {
+        loadDashboard();
+    }
+
+    // Settings wiring
+    if ($("save-settings-btn")) {
+        $("save-settings-btn").onclick = async () => {
+            try {
+                await request("/auth/profile", {
+                    method: "PUT",
+                    body: JSON.stringify({
+                        language: $("settings-language").value,
+                        theme: $("settings-theme").value,
+                        currency: $("settings-currency").value
+                    })
+                });
+                applyLanguage();
+                applyTheme($("settings-theme").value);
+                showNotification(i18n.t("addedSuccess")); // Reusing for success
+            } catch (error) {
+                showNotification(i18n.translateApiError(error.detail, error.status), "error");
+            }
+        };
+    }
+    if ($("change-password-btn")) {
+        $("change-password-btn").onclick = async () => {
+            try {
+                await request("/auth/password", {
+                    method: "PUT",
+                    body: JSON.stringify({
+                        current_password: $("current-password").value,
+                        new_password: $("new-password").value
+                    })
+                });
+                showNotification(i18n.t("passwordChangedSuccess"));
+                $("current-password").value = "";
+                $("new-password").value = "";
+            } catch (error) {
+                showNotification(i18n.translateApiError(error.detail, error.status), "error");
+            }
+        };
+    }
+    if ($("delete-account-btn")) {
+        $("delete-account-btn").onclick = async () => {
+            if (!confirm(i18n.t("deleteConfirmation"))) return;
+            try {
+                await request("/auth/delete", {
+                    method: "DELETE",
+                    body: JSON.stringify({ password: $("delete-password").value })
+                });
+                localStorage.removeItem(TOKEN_KEY);
+                window.location.reload();
+            } catch (error) {
+                showNotification(i18n.translateApiError(error.detail, error.status), "error");
+            }
+        };
+    }
+
+    // Call settings load on login/load
+    loadUserSettings();
+    document.querySelectorAll(".mobile-nav-item").forEach(item => {
+        item.onclick = () => {
+            document.querySelectorAll(".mobile-nav-item").forEach(i => i.classList.remove("active"));
+            item.classList.add("active");
+            const targetTab = item.dataset.tab;
+            document.querySelectorAll(".mobile-tab").forEach(tab => {
+                tab.hidden = tab.dataset.mobileTab !== targetTab;
+            });
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        };
+    });
+
+    if (window.innerWidth <= 820) {
+        document.querySelectorAll(".mobile-tab").forEach(tab => {
+            tab.hidden = tab.dataset.mobileTab !== "overview";
+        });
+    }
 });
