@@ -65,6 +65,7 @@
                             <button id="export-csv-btn" class="secondary-button" type="button"><span aria-hidden="true">↓</span> <span data-i18n="exportCsv">Экспорт CSV</span></button>
                             <button id="export-excel-btn" class="secondary-button" type="button"><span aria-hidden="true">↓</span> <span data-i18n="exportExcel">Экспорт Excel</span></button>
                             <button id="export-pdf-btn" class="secondary-button" type="button"><span aria-hidden="true">↓</span> <span data-i18n="exportPdf">Экспорт PDF</span></button>
+                            <button id="import-csv-btn" class="secondary-button" type="button"><span aria-hidden="true">↑</span> <span data-i18n="importCsv">Импорт CSV</span></button>
                         </div>
                     </div>
                     <div id="operation-form" class="operation-form hidden" aria-labelledby="operation-form-title">
@@ -177,6 +178,83 @@
         </div>
 
         <footer class="footer" data-i18n="footerText">Ваши финансы под контролем</footer>
+    </div>
+
+    <div id="import-modal" class="modal-overlay" hidden>
+        <div class="import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
+            <div class="form-heading">
+                <div><p class="eyebrow" data-i18n="importCsv">Импорт CSV</p><h3 id="import-title" data-i18n="importTitle">Импорт банковской выписки</h3></div>
+                <button id="import-close-btn" class="icon-button" type="button" data-i18n-aria-label="close" aria-label="">×</button>
+            </div>
+            <ol class="import-steps">
+                <li data-import-step="file" data-i18n="importStepFile">Файл</li>
+                <li data-import-step="mapping" data-i18n="importStepMapping">Столбцы</li>
+                <li data-import-step="preview" data-i18n="importStepPreview">Проверка</li>
+                <li data-import-step="report" data-i18n="importStepReport">Готово</li>
+            </ol>
+            <p id="import-error" class="auth-error" role="alert"></p>
+
+            <section class="import-pane" data-import-pane="file">
+                <div class="form-field">
+                    <label for="import-file" data-i18n="importChooseFile">Выберите CSV-файл выписки</label>
+                    <input id="import-file" type="file" accept=".csv,text/csv">
+                </div>
+                <p class="import-hint" data-i18n="importFileHint">UTF-8, разделитель «,» или «;», до 1 МБ и 5000 строк.</p>
+            </section>
+
+            <section class="import-pane" data-import-pane="mapping" hidden>
+                <div class="form-grid">
+                    <div class="form-field"><label for="import-delimiter" data-i18n="importDelimiter">Разделитель</label>
+                        <select id="import-delimiter"><option value="auto" data-i18n="importAuto">Автоматически</option><option value=",">,</option><option value=";">;</option></select></div>
+                    <div class="form-field import-checkbox"><label><input id="import-has-header" type="checkbox" checked> <span data-i18n="importHasHeader">Первая строка — заголовки</span></label></div>
+                    <div class="form-field"><label for="import-date-column" data-i18n="importDateColumn">Дата</label><select id="import-date-column" class="import-column"></select></div>
+                    <div class="form-field"><label for="import-date-format" data-i18n="importDateFormat">Формат даты</label>
+                        <select id="import-date-format"><option>DD.MM.YYYY</option><option>DD/MM/YYYY</option><option>MM/DD/YYYY</option><option>DD-MM-YYYY</option><option>YYYY-MM-DD</option></select></div>
+                    <div class="form-field"><label for="import-description-column" data-i18n="importDescriptionColumn">Описание</label><select id="import-description-column" class="import-column"></select></div>
+                    <div class="form-field"><label for="import-category-column" data-i18n="importCategoryColumn">Категория</label><select id="import-category-column" class="import-column"></select></div>
+                    <div class="form-field"><label for="import-amount-mode" data-i18n="importAmountMode">Как банк обозначает доходы и расходы</label>
+                        <select id="import-amount-mode"><option value="signed" data-i18n="importModeSigned">Знаком суммы</option><option value="type_column" data-i18n="importModeType">Отдельным столбцом типа</option><option value="debit_credit" data-i18n="importModeDebitCredit">Разными столбцами прихода и расхода</option></select></div>
+                    <div class="form-field"><label for="import-decimal" data-i18n="importDecimalSeparator">Дробная часть суммы</label>
+                        <select id="import-decimal"><option value="auto" data-i18n="importAuto">Автоматически</option><option value="," data-i18n="importDecimalComma">Запятая</option><option value="." data-i18n="importDecimalDot">Точка</option></select></div>
+                    <div class="form-field" data-import-mode="signed type_column"><label for="import-amount-column" data-i18n="importAmountColumn">Сумма</label><select id="import-amount-column" class="import-column"></select></div>
+                    <div class="form-field import-checkbox" data-import-mode="signed"><label><input id="import-invert-sign" type="checkbox"> <span data-i18n="importInvertSign">Минус означает доход</span></label></div>
+                    <div class="form-field" data-import-mode="type_column"><label for="import-type-column" data-i18n="importTypeColumn">Столбец типа</label><select id="import-type-column" class="import-column"></select></div>
+                    <div class="form-field" data-import-mode="type_column"><label for="import-income-values" data-i18n="importIncomeValues">Значения дохода</label><input id="import-income-values" maxlength="200" placeholder="CR"></div>
+                    <div class="form-field" data-import-mode="type_column"><label for="import-expense-values" data-i18n="importExpenseValues">Значения расхода</label><input id="import-expense-values" maxlength="200" placeholder="DR"></div>
+                    <div class="form-field" data-import-mode="debit_credit"><label for="import-income-column" data-i18n="importIncomeColumn">Столбец прихода</label><select id="import-income-column" class="import-column"></select></div>
+                    <div class="form-field" data-import-mode="debit_credit"><label for="import-expense-column" data-i18n="importExpenseColumn">Столбец расхода</label><select id="import-expense-column" class="import-column"></select></div>
+                    <div class="form-field"><label for="import-currency-column" data-i18n="importCurrencyColumn">Валюта</label><select id="import-currency-column" class="import-column"></select></div>
+                    <div class="form-field"><label for="import-reference-column" data-i18n="importReferenceColumn">Номер операции в банке</label><select id="import-reference-column" class="import-column"></select></div>
+                    <div class="form-field"><label for="import-default-income" data-i18n="importDefaultIncomeCategory">Категория дохода</label><select id="import-default-income"></select></div>
+                    <div class="form-field"><label for="import-default-expense" data-i18n="importDefaultExpenseCategory">Категория расхода</label><select id="import-default-expense"></select></div>
+                </div>
+                <p id="import-currency-note" class="import-hint"></p>
+                <h4 data-i18n="importSample">Первые строки файла</h4>
+                <div class="import-table-wrap"><table id="import-sample" class="import-table"></table></div>
+                <div class="form-buttons">
+                    <button id="import-preview-btn" class="primary-button" type="button" data-i18n="importShowPreview">Показать предпросмотр</button>
+                    <button class="secondary-button import-back-btn" type="button" data-import-back="file" data-i18n="importBack">Назад</button>
+                </div>
+            </section>
+
+            <section class="import-pane" data-import-pane="preview" hidden>
+                <p id="import-summary" class="import-summary"></p>
+                <div class="import-table-wrap"><table id="import-preview-table" class="import-table"></table></div>
+                <p id="import-preview-more" class="import-hint"></p>
+                <div id="import-errors" class="import-errors"></div>
+                <div class="form-buttons">
+                    <button id="import-confirm-btn" class="primary-button" type="button">Импортировать</button>
+                    <button class="secondary-button import-back-btn" type="button" data-import-back="mapping" data-i18n="importBack">Назад</button>
+                </div>
+            </section>
+
+            <section class="import-pane" data-import-pane="report" hidden>
+                <h4 data-i18n="importDone">Импорт завершён</h4>
+                <p id="import-report" class="import-summary"></p>
+                <div id="import-report-errors" class="import-errors"></div>
+                <div class="form-buttons"><button id="import-finish-btn" class="primary-button" type="button" data-i18n="close">Закрыть</button></div>
+            </section>
+        </div>
     </div>
 
     <div id="auth-modal" class="modal-overlay" hidden>

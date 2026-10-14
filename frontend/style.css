@@ -282,3 +282,34 @@ select:focus, input:focus { border-color: var(--accent); }
 .calendar-cell-dot { width: 6px; height: 6px; background: var(--success); border-radius: 50%; }
 .calendar-cell.empty { background: transparent; border: none; cursor: default; }
 .calendar-details { margin-top: 14px; padding: 12px; background: var(--background); border-radius: 10px; border: 1px solid var(--border); font-size: 0.9rem; }
+
+/* Bank CSV import */
+.import-modal { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 16px; padding: 24px; width: 100%; max-width: 760px; max-height: calc(100vh - 32px); overflow-y: auto; box-shadow: var(--shadow); animation: fade-up 200ms ease both; }
+.import-steps { display: flex; gap: 6px; margin: 0 0 14px; padding: 0; list-style: none; counter-reset: import-step; }
+.import-steps li { flex: 1; padding: 7px 8px; border-radius: 9px; background: var(--surface-secondary); color: var(--text-secondary); font-size: .78rem; font-weight: 750; text-align: center; counter-increment: import-step; }
+.import-steps li::before { content: counter(import-step) ". "; }
+.import-steps li.active { background: var(--accent); color: #fff; }
+.import-steps li.done { background: var(--accent-soft); color: var(--accent); }
+.import-modal .auth-error:empty { display: none; }
+.import-hint { color: var(--text-secondary); font-size: .82rem; margin: 6px 0 12px; }
+.import-checkbox { display: flex; align-items: flex-end; }
+.import-checkbox label { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.import-checkbox input { width: auto; min-height: 0; }
+.import-modal [data-import-mode][hidden] { display: none; }
+.import-modal h4 { margin: 16px 0 8px; font-size: .95rem; }
+.import-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-small); }
+.import-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.import-table th, .import-table td { padding: 7px 9px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.import-table th { background: var(--surface-secondary); color: var(--text-secondary); font-weight: 750; }
+.import-table tr:last-child td { border-bottom: 0; }
+.import-table .income { color: var(--success); }
+.import-table .expense { color: var(--danger); }
+.import-table tr.duplicate td { color: var(--text-secondary); text-decoration: line-through; }
+.import-badge { display: inline-block; padding: 2px 7px; border-radius: 8px; background: var(--surface-secondary); color: var(--warning); font-size: .72rem; text-decoration: none; }
+.import-summary { font-weight: 650; margin: 0 0 12px; }
+.import-errors h4 { color: var(--danger); }
+.import-errors ul { margin: 0; padding-left: 18px; max-height: 180px; overflow-y: auto; font-size: .82rem; color: var(--text-secondary); }
+@media (max-width: 820px) {
+    .import-modal { padding: 18px 14px; }
+    .import-steps li { font-size: .7rem; padding: 6px 4px; }
+}

@@ -95,6 +95,7 @@ function applyLanguage() {
     updateCategoryFilterOptions();
     applyTheme(document.documentElement.dataset.theme || getStoredTheme());
     if (currentDashboard) renderDashboard(currentDashboard);
+    refreshImportLanguage();
 }
 
 function updateCategoryOptions(selectedValue = "") {
@@ -192,7 +193,7 @@ async function request(path, options = {}) {
         ...(token ? { "Authorization": `Bearer ${token}` } : {}),
         ...(options.headers || {})
     };
-    const response = await fetch(`${API_URL}${path}`, { headers, ...options });
+    const response = await fetch(`${API_URL}${path}`, { ...options, headers });
     if (response.status === 401) {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_EMAIL_KEY);
@@ -745,7 +746,321 @@ async function loadUserSettings() {
     }
 }
 
+// --- Bank CSV import ---
+const IMPORT_MAX_BYTES = 1000000;
+const IMPORT_STEPS = ["file", "mapping", "preview", "report"];
+const IMPORT_COLUMN_FIELDS = {
+    date_column: "import-date-column",
+    description_column: "import-description-column",
+    category_column: "import-category-column",
+    amount_column: "import-amount-column",
+    type_column: "import-type-column",
+    income_column: "import-income-column",
+    expense_column: "import-expense-column",
+    currency_column: "import-currency-column",
+    reference_column: "import-reference-column"
+};
+const importState = { file: null, columns: [], sample: [], currency: "", preview: null, report: null, step: "file" };
+
+function showImportStep(step) {
+    importState.step = step;
+    const current = IMPORT_STEPS.indexOf(step);
+    document.querySelectorAll("[data-import-pane]").forEach((pane) => {
+        pane.hidden = pane.dataset.importPane !== step;
+    });
+    document.querySelectorAll("[data-import-step]").forEach((item) => {
+        const index = IMPORT_STEPS.indexOf(item.dataset.importStep);
+        item.classList.toggle("active", index === current);
+        item.classList.toggle("done", index < current);
+    });
+    $("import-error").textContent = "";
+}
+
+function showImportError(error) {
+    $("import-error").textContent = typeof error === "string"
+        ? error
+        : i18n.translateApiError(error.detail, error.status);
+}
+
+function setImportBusy(busy) {
+    document.querySelectorAll("#import-modal button, #import-modal input, #import-modal select").forEach((element) => {
+        if (element.id !== "import-close-btn") element.disabled = busy;
+    });
+    if (busy) $("import-error").textContent = i18n.t("importLoading");
+}
+
+function importColumnLabel(index) {
+    return importState.columns[index] || i18n.t("importColumn", { n: index + 1 });
+}
+
+function fillCategorySelect(select, categories, selected) {
+    select.replaceChildren(...categories.map((category) => new Option(i18n.translateCategory(category), category)));
+    select.value = categories.includes(selected) ? selected : "Другое";
+}
+
+function fillImportCategorySelects() {
+    fillCategorySelect($("import-default-income"), INCOME_CATEGORIES, $("import-default-income").value);
+    fillCategorySelect($("import-default-expense"), EXPENSE_CATEGORIES, $("import-default-expense").value);
+}
+
+function fillImportColumnSelects(suggested = null) {
+    for (const [field, id] of Object.entries(IMPORT_COLUMN_FIELDS)) {
+        const select = $(id);
+        const previous = select.value;
+        const options = [new Option(i18n.t("importNotUsed"), "")];
+        importState.columns.forEach((_, index) => options.push(new Option(importColumnLabel(index), String(index))));
+        select.replaceChildren(...options);
+        const value = suggested ? (field in suggested ? String(suggested[field]) : "") : previous;
+        select.value = value !== "" && Number(value) < importState.columns.length ? value : "";
+    }
+    if (suggested && suggested.amount_mode) $("import-amount-mode").value = suggested.amount_mode;
+    updateImportModeFields();
+}
+
+function updateImportModeFields() {
+    const mode = $("import-amount-mode").value;
+    document.querySelectorAll("[data-import-mode]").forEach((field) => {
+        field.hidden = !field.dataset.importMode.split(" ").includes(mode);
+    });
+}
+
+function hasRequiredImportMapping() {
+    const mode = $("import-amount-mode").value;
+    const filled = (id) => $(id).value !== "";
+    if (!filled("import-date-column")) return false;
+    if (mode === "debit_credit") return filled("import-income-column") && filled("import-expense-column");
+    if (mode === "type_column") return filled("import-amount-column") && filled("import-type-column");
+    return filled("import-amount-column");
+}
+
+function importQuery(withMapping) {
+    const params = new URLSearchParams({
+        delimiter: $("import-delimiter").value,
+        has_header: String($("import-has-header").checked)
+    });
+    if (withMapping) {
+        params.set("date_format", $("import-date-format").value);
+        params.set("amount_mode", $("import-amount-mode").value);
+        params.set("decimal_separator", $("import-decimal").value);
+        params.set("invert_sign", String($("import-invert-sign").checked));
+        params.set("income_values", $("import-income-values").value);
+        params.set("expense_values", $("import-expense-values").value);
+        params.set("default_income_category", $("import-default-income").value);
+        params.set("default_expense_category", $("import-default-expense").value);
+        for (const [field, id] of Object.entries(IMPORT_COLUMN_FIELDS)) {
+            if ($(id).value !== "") params.set(field, $(id).value);
+        }
+    }
+    return params.toString();
+}
+
+function sendImport(path, withMapping) {
+    return request(`${path}?${importQuery(withMapping)}`, {
+        method: "POST",
+        body: importState.file,
+        headers: { "Content-Type": "text/csv" }
+    });
+}
+
+function buildTable(table, headers, rows) {
+    const head = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    headers.forEach((text) => {
+        const cell = document.createElement("th");
+        cell.textContent = text;
+        headRow.append(cell);
+    });
+    head.append(headRow);
+    const body = document.createElement("tbody");
+    rows.forEach(({ cells, className = "" }) => {
+        const row = document.createElement("tr");
+        if (className) row.className = className;
+        cells.forEach((value) => {
+            const cell = document.createElement("td");
+            if (value instanceof Node) cell.append(value);
+            else if (value && typeof value === "object") {
+                cell.textContent = value.text;
+                cell.className = value.className || "";
+            } else cell.textContent = value ?? "";
+            row.append(cell);
+        });
+        body.append(row);
+    });
+    table.replaceChildren(head, body);
+}
+
+function renderImportSample() {
+    const headers = importState.columns.map((_, index) => importColumnLabel(index));
+    buildTable($("import-sample"), headers, importState.sample.map((cells) => ({ cells })));
+    $("import-currency-note").textContent = i18n.t("importCurrencyNote", { currency: importState.currency });
+}
+
+function renderImportErrors(container, errors, total) {
+    container.replaceChildren();
+    if (!total) return;
+    const title = document.createElement("h4");
+    title.textContent = i18n.t("importErrorsTitle");
+    const list = document.createElement("ul");
+    errors.forEach((error) => {
+        const item = document.createElement("li");
+        const column = error.column === null || error.column === undefined ? "" : ` (${importColumnLabel(error.column)})`;
+        item.textContent = `${i18n.t("importLine", { line: error.line })}: ${i18n.t(`importError_${error.code}`)}${column}`;
+        list.append(item);
+    });
+    container.append(title, list);
+    if (total > errors.length) container.append(createState(i18n.t("importShownFirst", { count: errors.length }), "import-hint"));
+}
+
+function renderImportPreview() {
+    const data = importState.preview;
+    const ready = data.valid_rows - data.duplicate_rows;
+    $("import-summary").textContent = i18n.t("importSummary", {
+        total: data.total_rows, valid: ready, duplicates: data.duplicate_rows, errors: data.error_rows
+    });
+    buildTable(
+        $("import-preview-table"),
+        [i18n.t("importDateColumn"), i18n.t("importDescriptionColumn"), i18n.t("importCategoryColumn"), i18n.t("operationType"), i18n.t("importAmountColumn")],
+        data.rows.map((row) => {
+            const income = row.type === "Доход";
+            let description = row.description;
+            if (row.duplicate) {
+                description = document.createElement("span");
+                const badge = document.createElement("span");
+                badge.className = "import-badge";
+                badge.textContent = i18n.t("importDuplicate");
+                description.append(document.createTextNode(`${row.description} `), badge);
+            }
+            return {
+                className: row.duplicate ? "duplicate" : "",
+                cells: [
+                    formatDate(row.date),
+                    description,
+                    i18n.translateCategory(row.category),
+                    i18n.translateOperationType(row.type),
+                    { text: `${income ? "+" : "−"}${formatMoney(row.amount)}`, className: income ? "income" : "expense" }
+                ]
+            };
+        })
+    );
+    $("import-preview-more").textContent = data.valid_rows > data.rows.length
+        ? i18n.t("importShownFirst", { count: data.rows.length })
+        : "";
+    renderImportErrors($("import-errors"), data.errors, data.error_rows);
+    const confirm = $("import-confirm-btn");
+    confirm.textContent = ready > 0 ? i18n.t("importConfirm", { count: ready }) : i18n.t("importNothingNew");
+    confirm.disabled = ready <= 0;
+}
+
+function renderImportReport() {
+    const data = importState.report;
+    $("import-report").textContent = i18n.t("importReport", {
+        imported: data.imported, duplicates: data.duplicate_rows, errors: data.error_rows
+    });
+    renderImportErrors($("import-report-errors"), data.errors, data.error_rows);
+}
+
+function refreshImportLanguage() {
+    if (!$("import-modal") || $("import-modal").hidden) return;
+    fillImportCategorySelects();
+    if (importState.columns.length) {
+        fillImportColumnSelects();
+        renderImportSample();
+    }
+    if (importState.preview) renderImportPreview();
+    if (importState.report) renderImportReport();
+}
+
+async function loadImportStructure(useSuggestions) {
+    setImportBusy(true);
+    try {
+        const data = await sendImport("/import/csv/preview", false);
+        importState.columns = data.columns;
+        importState.sample = data.sample;
+        importState.currency = data.currency;
+        setImportBusy(false);
+        fillImportColumnSelects(useSuggestions ? data.suggested : null);
+        renderImportSample();
+        showImportStep("mapping");
+    } catch (error) {
+        setImportBusy(false);
+        showImportError(error);
+    }
+}
+
+async function onImportFileSelected() {
+    const file = $("import-file").files[0];
+    if (!file) return;
+    if (!/\.csv$/i.test(file.name)) return showImportError(i18n.t("importNotCsv"));
+    if (file.size > IMPORT_MAX_BYTES) return showImportError(i18n.t("importFileTooLarge"));
+    importState.file = file;
+    importState.preview = null;
+    importState.report = null;
+    await loadImportStructure(true);
+}
+
+async function runImportPreview() {
+    if (!hasRequiredImportMapping()) return showImportError(i18n.t("importRequiredHint"));
+    setImportBusy(true);
+    try {
+        importState.preview = await sendImport("/import/csv/preview", true);
+        setImportBusy(false);
+        renderImportPreview();
+        showImportStep("preview");
+    } catch (error) {
+        setImportBusy(false);
+        showImportError(error);
+    }
+}
+
+async function confirmImport() {
+    setImportBusy(true);
+    try {
+        importState.report = await sendImport("/import/csv/commit", true);
+        setImportBusy(false);
+        renderImportReport();
+        showImportStep("report");
+        loadDashboard();
+    } catch (error) {
+        setImportBusy(false);
+        renderImportPreview();
+        showImportError(error);
+    }
+}
+
+function openImportModal() {
+    Object.assign(importState, { file: null, columns: [], sample: [], currency: "", preview: null, report: null });
+    $("import-file").value = "";
+    fillImportCategorySelects();
+    showImportStep("file");
+    $("import-modal").hidden = false;
+    $("import-file").focus();
+}
+
+function closeImportModal() {
+    $("import-modal").hidden = true;
+    importState.file = null;
+}
+
+function setupImport() {
+    $("import-csv-btn").onclick = openImportModal;
+    $("import-close-btn").onclick = closeImportModal;
+    $("import-finish-btn").onclick = closeImportModal;
+    $("import-file").onchange = onImportFileSelected;
+    $("import-delimiter").onchange = () => loadImportStructure(false);
+    $("import-has-header").onchange = () => loadImportStructure(true);
+    $("import-amount-mode").onchange = updateImportModeFields;
+    $("import-preview-btn").onclick = runImportPreview;
+    $("import-confirm-btn").onclick = confirmImport;
+    document.querySelectorAll("[data-import-back]").forEach((button) => {
+        button.onclick = () => showImportStep(button.dataset.importBack);
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !$("import-modal").hidden) closeImportModal();
+    });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+    setupImport();
 
     i18n.setLanguage(getStoredLanguage());
     applyTheme(getStoredTheme());

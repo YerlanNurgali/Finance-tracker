@@ -324,6 +324,14 @@ def create_database():
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_user_id ON budgets (user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_goals_user_id ON goals (user_id)")
 
+            # 7. CSV import de-duplication: a statement row's fingerprint is unique
+            # per user, so re-importing the same file cannot create duplicates.
+            cursor.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS import_hash TEXT")
+            cursor.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS idx_operations_user_import_hash "
+                f"ON {TABLE_NAME} (user_id, import_hash) WHERE import_hash IS NOT NULL"
+            )
+
 
 # User operations
 def create_user(email: str, password_hash: str) -> int:
@@ -476,6 +484,59 @@ def update_operation(operation_id: int, user_id: int, date, operation_type, amou
             )
             if cursor.rowcount == 0:
                 raise OperationNotFound("Операция не найдена")
+
+
+# CSV import
+IMPORT_BATCH_SIZE = 500
+
+
+def find_imported_hashes(user_id: int, hashes):
+    """Returns the subset of ``hashes`` this user has already imported."""
+    hashes = list(hashes)
+    if not hashes:
+        return set()
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT import_hash FROM {TABLE_NAME} WHERE user_id = %s AND import_hash = ANY(%s)",
+                (user_id, hashes),
+            )
+            return {row[0] for row in cursor.fetchall()}
+    finally:
+        connection.close()
+
+
+def import_operations(user_id: int, operations):
+    """Inserts (date, operation_type, amount, category, import_hash) tuples in one
+    transaction and returns the hashes that were actually inserted.
+
+    Rows whose hash the user already has are skipped by the unique index, so a
+    repeated import is harmless. Any database error rolls back the whole import.
+    """
+    validated = []
+    for date, operation_type, amount, category, import_hash in operations:
+        amount, category = _validate_operation(operation_type, amount, category)
+        validated.append((date, operation_type, amount, category, import_hash))
+
+    inserted = set()
+    if not validated:
+        return inserted
+    with _transaction() as connection:
+        with connection.cursor() as cursor:
+            for start in range(0, len(validated), IMPORT_BATCH_SIZE):
+                batch = validated[start:start + IMPORT_BATCH_SIZE]
+                placeholders = ", ".join(["(%s, %s, %s, %s, %s, %s)"] * len(batch))
+                params = [value for row in batch for value in (user_id, *row)]
+                cursor.execute(
+                    f"""INSERT INTO {TABLE_NAME} (user_id, date, operation_type, amount, category, import_hash)
+                        VALUES {placeholders}
+                        ON CONFLICT (user_id, import_hash) WHERE import_hash IS NOT NULL DO NOTHING
+                        RETURNING import_hash""",
+                    params,
+                )
+                inserted.update(row[0] for row in cursor.fetchall())
+    return inserted
 
 
 # Budgets

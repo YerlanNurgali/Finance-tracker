@@ -3,6 +3,7 @@ from pathlib import Path
 import csv
 import io
 import json
+import logging
 
 from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -12,9 +13,13 @@ from typing import Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from starlette.concurrency import run_in_threadpool
 
+import bank_import
 import database
 import auth
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -377,6 +382,152 @@ def modify_operation(operation_id: int, operation: OperationPayload, current_use
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"message": "Операция обновлена"}
+
+
+# --- Bank CSV import ---
+IMPORT_PREVIEW_LIMIT = 100
+_IMPORT_ERROR_STATUS = {"file_too_large": 413, "invalid_settings": 422}
+
+
+def _user_rate_key(request: Request) -> str:
+    # Behind a proxy every client can share one IP address, so the import
+    # limits count per signed-in user. Auth itself is enforced by
+    # get_current_user; this only picks the counter.
+    authorization = request.headers.get("authorization", "")
+    if authorization.startswith("Bearer "):
+        payload = auth.verify_access_token(authorization.split(" ", 1)[1])
+        if payload and "user_id" in payload:
+            return f"user:{payload['user_id']}"
+    return get_remote_address(request)
+
+
+def import_settings(
+    delimiter: str = Query("auto", max_length=4),
+    has_header: bool = Query(True),
+    date_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    date_format: str = Query("DD.MM.YYYY", max_length=16),
+    amount_mode: str = Query("signed", max_length=16),
+    amount_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    invert_sign: bool = Query(False),
+    type_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    income_values: str = Query("", max_length=200),
+    expense_values: str = Query("", max_length=200),
+    income_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    expense_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    description_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    category_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    currency_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    reference_column: Optional[int] = Query(None, ge=0, lt=bank_import.MAX_COLUMNS),
+    decimal_separator: str = Query("auto", max_length=4),
+    default_income_category: str = Query(bank_import.DEFAULT_CATEGORY, max_length=bank_import.MAX_CATEGORY_CHARS),
+    default_expense_category: str = Query(bank_import.DEFAULT_CATEGORY, max_length=bank_import.MAX_CATEGORY_CHARS),
+) -> bank_import.ImportSettings:
+    return bank_import.ImportSettings(
+        delimiter=delimiter, has_header=has_header, date_column=date_column, date_format=date_format,
+        amount_mode=amount_mode, amount_column=amount_column, invert_sign=invert_sign,
+        type_column=type_column, income_values=income_values, expense_values=expense_values,
+        income_column=income_column, expense_column=expense_column,
+        description_column=description_column, category_column=category_column,
+        currency_column=currency_column, reference_column=reference_column, decimal_separator=decimal_separator,
+        default_income_category=default_income_category, default_expense_category=default_expense_category,
+    )
+
+
+async def _read_csv_body(request: Request) -> bytes:
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type != "text/csv":
+        raise HTTPException(status_code=415, detail="Ожидается файл CSV")
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > bank_import.MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="Файл слишком большой")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > bank_import.MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail="Файл слишком большой")
+    return bytes(body)
+
+
+async def _parse_upload(request, settings, user_id):
+    raw = await _read_csv_body(request)
+    user_currency = (await run_in_threadpool(database.get_user_settings, user_id))["currency"]
+    try:
+        return bank_import.parse_statement(raw, settings, user_currency), user_currency
+    except bank_import.ImportFileError as exc:
+        raise HTTPException(status_code=_IMPORT_ERROR_STATUS.get(exc.code, 400), detail=str(exc)) from exc
+
+
+def _import_summary(result):
+    return {
+        "columns": result.columns,
+        "delimiter": result.delimiter,
+        "total_rows": result.total_rows,
+        "empty_rows": result.empty_rows,
+        "error_rows": len(result.errors),
+        "errors": result.errors[:IMPORT_PREVIEW_LIMIT],
+    }
+
+
+@app.post("/import/csv/preview")
+@limiter.limit("30/minute", key_func=_user_rate_key)
+async def preview_csv_import(
+    request: Request,
+    settings: bank_import.ImportSettings = Depends(import_settings),
+    current_user: dict = Depends(get_current_user),
+):
+    result, currency = await _parse_upload(request, settings, current_user["id"])
+    existing = await run_in_threadpool(
+        database.find_imported_hashes, current_user["id"], [row.import_hash for row in result.rows]
+    )
+    return {
+        **_import_summary(result),
+        "mapped": settings.is_mapped(),
+        "suggested": bank_import.suggest_mapping(result.columns) if settings.has_header else {},
+        "sample": result.sample,
+        "currency": currency,
+        "valid_rows": len(result.rows),
+        "duplicate_rows": sum(1 for row in result.rows if row.import_hash in existing),
+        "rows": [
+            {
+                "line": row.line,
+                "date": row.date,
+                "type": row.operation_type,
+                "amount": float(row.amount),
+                "category": row.category,
+                "description": row.description[:200],
+                "duplicate": row.import_hash in existing,
+            }
+            for row in result.rows[:IMPORT_PREVIEW_LIMIT]
+        ],
+    }
+
+
+@app.post("/import/csv/commit")
+@limiter.limit("10/minute", key_func=_user_rate_key)
+async def commit_csv_import(
+    request: Request,
+    settings: bank_import.ImportSettings = Depends(import_settings),
+    current_user: dict = Depends(get_current_user),
+):
+    if not settings.is_mapped():
+        raise HTTPException(status_code=422, detail="Настройте столбцы для импорта")
+    result, _ = await _parse_upload(request, settings, current_user["id"])
+    operations = [
+        (row.date, row.operation_type, row.amount, row.category, row.import_hash) for row in result.rows
+    ]
+    try:
+        inserted = await run_in_threadpool(database.import_operations, current_user["id"], operations)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        # The exception text may quote statement values, so only its type is logged.
+        logger.error("CSV import failed for user %s: %s", current_user["id"], type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Не удалось сохранить импорт. Данные не изменены") from None
+    return {
+        **_import_summary(result),
+        "imported": len(inserted),
+        "duplicate_rows": len(result.rows) - len(inserted),
+    }
 
 
 # --- Budgets Routes ---
