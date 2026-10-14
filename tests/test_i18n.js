@@ -45,3 +45,22 @@ test("API errors are localized and invalid language falls back to Russian", () =
     assert.equal(i18n.setLanguage("unknown"), "ru");
     assert.equal(i18n.getLanguage(), "ru");
 });
+
+test("every static i18n key used in the frontend exists in all languages", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const frontend = path.join(__dirname, "..", "frontend");
+    const used = new Set();
+    for (const file of ["index.html", "script.js"]) {
+        const source = fs.readFileSync(path.join(frontend, file), "utf8");
+        for (const match of source.matchAll(/data-i18n(?:-[a-z-]+)?=["']([^"'$]+)["']/g)) used.add(match[1]);
+        for (const match of source.matchAll(/i18n\.t\(\s*["']([^"']+)["']/g)) used.add(match[1]);
+    }
+    assert.ok(used.size > 0);
+
+    const translations = i18n.getTranslations();
+    for (const language of i18n.SUPPORTED_LANGUAGES) {
+        const missing = [...used].filter((key) => !(key in translations[language])).sort();
+        assert.deepEqual(missing, [], `missing ${language} translations`);
+    }
+});

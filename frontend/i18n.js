@@ -206,7 +206,20 @@
             importError_unknown_type: "Неизвестный тип операции",
             importError_currency_mismatch: "Валюта не совпадает с валютой профиля",
             importError_field_too_long: "Слишком длинное значение",
-            importReferenceColumn: "Номер операции в банке (для защиты от повторов)"
+            importReferenceColumn: "Номер операции в банке (для защиты от повторов)",
+            accountSettings: "Настройки аккаунта",
+            profileTitle: "Профиль",
+            emailLabel: "Email:",
+            preferencesTitle: "Предпочтения",
+            currencyLabel: "Валюта",
+            securityTitle: "Безопасность (Смена пароля)",
+            dangerZone: "Опасная зона",
+            deleteAccountWarning: "Удаление аккаунта приведёт к безвозвратному удалению всех операций, бюджетов и целей.",
+            passwordConfirmation: "Подтвердите паролем",
+            monthlyTrend: "Тренд по месяцам",
+            monthlyTrendChart: "Тренд доходов и расходов по месяцам",
+            notEnoughData: "Недостаточно данных",
+            deleteGoal: "Удалить цель"
         },
         en: {
             appName: "Finance Tracker",
@@ -405,7 +418,20 @@
             importError_unknown_type: "Unknown operation type",
             importError_currency_mismatch: "The currency differs from your profile currency",
             importError_field_too_long: "The value is too long",
-            importReferenceColumn: "Bank transaction ID (prevents repeats)"
+            importReferenceColumn: "Bank transaction ID (prevents repeats)",
+            accountSettings: "Account settings",
+            profileTitle: "Profile",
+            emailLabel: "Email:",
+            preferencesTitle: "Preferences",
+            currencyLabel: "Currency",
+            securityTitle: "Security (Change password)",
+            dangerZone: "Danger zone",
+            deleteAccountWarning: "Deleting your account will permanently delete all operations, budgets and goals.",
+            passwordConfirmation: "Confirm with your password",
+            monthlyTrend: "Monthly trend",
+            monthlyTrendChart: "Monthly income and expense trend",
+            notEnoughData: "Not enough data",
+            deleteGoal: "Delete goal"
         },
         kk: {
             appName: "Finance Tracker",
@@ -604,7 +630,20 @@
             importError_unknown_type: "Операция түрі белгісіз",
             importError_currency_mismatch: "Валюта профиль валютасына сәйкес емес",
             importError_field_too_long: "Мән тым ұзын",
-            importReferenceColumn: "Банктегі операция нөмірі (қайталанудан қорғайды)"
+            importReferenceColumn: "Банктегі операция нөмірі (қайталанудан қорғайды)",
+            accountSettings: "Аккаунт баптаулары",
+            profileTitle: "Профиль",
+            emailLabel: "Email:",
+            preferencesTitle: "Қалаулар",
+            currencyLabel: "Валюта",
+            securityTitle: "Қауіпсіздік (Құпиясөзді өзгерту)",
+            dangerZone: "Қауіпті аймақ",
+            deleteAccountWarning: "Аккаунтты жою барлық операцияларды, бюджеттер мен мақсаттарды біржола жояды.",
+            passwordConfirmation: "Құпиясөзбен растаңыз",
+            monthlyTrend: "Айлық динамика",
+            monthlyTrendChart: "Кірістер мен шығыстардың айлық динамикасы",
+            notEnoughData: "Деректер жеткіліксіз",
+            deleteGoal: "Мақсатты жою"
         }
     };
 
