@@ -7,6 +7,9 @@ const INCOME_CATEGORIES = ["Зарплата", "Фриланс", "Бизнес",
 const LOCALES = { kk: "kk-KZ", en: "en-US", ru: "ru-RU" };
 const VALID_THEMES = ["light", "dark"];
 
+const CURRENCY_SYMBOLS = { KZT: "₸", USD: "$", EUR: "€", RUB: "₽" };
+let currentCurrency = "KZT";
+
 let editingOperationId = null;
 let editingBudgetId = null;
 let currentPeriod = "all";
@@ -27,7 +30,15 @@ function getStoredTheme() {
 }
 
 function formatMoney(amount) {
-    return `${new Intl.NumberFormat(LOCALES[i18n.getLanguage()]).format(Number(amount) || 0)} ₸`;
+    const symbol = CURRENCY_SYMBOLS[currentCurrency] || "₸";
+    const formatted = new Intl.NumberFormat(LOCALES[i18n.getLanguage()]).format(Number(amount) || 0);
+    return `${formatted} ${symbol}`;
+}
+
+function updateSymbol(symbol) {
+    document.querySelectorAll(".currency-symbol").forEach((el) => {
+        el.textContent = symbol;
+    });
 }
 
 function formatDate(dateString) {
@@ -272,6 +283,113 @@ function renderChart(categories) {
     });
 }
 
+function renderTrendChart(monthlyTrend) {
+    const canvas = $("trend-chart");
+    if (!canvas || !canvas.getContext) return;
+
+    // Size the canvas before any drawing so the empty state and the chart share
+    // the same dimensions. Setting width/height also clears the bitmap, so a
+    // repeat call never stacks drawings on top of the previous one.
+    const W = canvas.offsetWidth || 600;
+    const H = 220;
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+
+    const entries = Object.entries(monthlyTrend || {}).sort(([a], [b]) => a.localeCompare(b));
+    if (entries.length < 2) {
+        const styles = getComputedStyle(document.documentElement);
+        const text = styles.getPropertyValue("--text-secondary").trim() || "#64748b";
+        ctx.fillStyle = text;
+        ctx.font = "14px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(i18n.t("notEnoughData") || "Недостаточно данных", W / 2, H / 2);
+        return;
+    }
+    const styles = getComputedStyle(document.documentElement);
+    const incomeColor = styles.getPropertyValue("--income").trim() || "#22c55e";
+    const expenseColor = styles.getPropertyValue("--expense").trim() || "#ef4444";
+    const textColor = styles.getPropertyValue("--text-secondary").trim() || "#64748b";
+    const gridColor = styles.getPropertyValue("--border").trim() || "#e2e8f0";
+
+    const PAD = { top: 16, right: 24, bottom: 40, left: 64 };
+    const chartW = W - PAD.left - PAD.right;
+    const chartH = H - PAD.top - PAD.bottom;
+
+    const allValues = entries.flatMap(([, v]) => [v.income, v.expense]);
+    const maxVal = Math.max(...allValues, 1);
+
+    const xStep = chartW / (entries.length - 1);
+
+    function toX(i) { return PAD.left + i * xStep; }
+    function toY(val) { return PAD.top + chartH - (val / maxVal * chartH); }
+
+    // Grid lines
+    [0, 0.25, 0.5, 0.75, 1].forEach(ratio => {
+        const y = PAD.top + chartH - ratio * chartH;
+        ctx.beginPath();
+        ctx.strokeStyle = gridColor;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.moveTo(PAD.left, y);
+        ctx.lineTo(W - PAD.right, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const label = Math.round(maxVal * ratio);
+        ctx.fillStyle = textColor;
+        ctx.font = "11px sans-serif";
+        ctx.textAlign = "right";
+        ctx.fillText(label >= 1000 ? `${Math.round(label / 1000)}k` : label, PAD.left - 6, y + 4);
+    });
+
+    // Income line
+    ctx.beginPath();
+    ctx.strokeStyle = incomeColor;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = "round";
+    entries.forEach(([, v], i) => {
+        i === 0 ? ctx.moveTo(toX(i), toY(v.income)) : ctx.lineTo(toX(i), toY(v.income));
+    });
+    ctx.stroke();
+
+    // Expense line
+    ctx.beginPath();
+    ctx.strokeStyle = expenseColor;
+    ctx.lineWidth = 2.5;
+    ctx.lineJoin = "round";
+    entries.forEach(([, v], i) => {
+        i === 0 ? ctx.moveTo(toX(i), toY(v.expense)) : ctx.lineTo(toX(i), toY(v.expense));
+    });
+    ctx.stroke();
+
+    // Dots + x-labels
+    entries.forEach(([month, v], i) => {
+        [{ val: v.income, color: incomeColor }, { val: v.expense, color: expenseColor }].forEach(({ val, color }) => {
+            ctx.beginPath();
+            ctx.fillStyle = color;
+            ctx.arc(toX(i), toY(val), 4, 0, Math.PI * 2);
+            ctx.fill();
+        });
+        ctx.fillStyle = textColor;
+        ctx.font = "11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(month.slice(5), toX(i), H - PAD.bottom + 16); // show MM only
+    });
+
+    // Legend
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "left";
+    [{ color: incomeColor, label: i18n.t("income") || "Доход" },
+     { color: expenseColor, label: i18n.t("expense") || "Расход" }].forEach(({ color, label }, idx) => {
+        const lx = PAD.left + idx * 100;
+        const ly = H - 4;
+        ctx.fillStyle = color;
+        ctx.fillRect(lx, ly - 9, 14, 9);
+        ctx.fillStyle = textColor;
+        ctx.fillText(label, lx + 18, ly);
+    });
+}
+
 function createState(message, className = "empty-state") {
     const state = document.createElement("p");
     state.className = className;
@@ -343,6 +461,7 @@ function renderDashboard(data) {
     ].join("");
     renderCategories(data.categories);
     renderChart(data.categories);
+    renderTrendChart(data.monthly_trend);
     renderOperations(data.operations);
     renderCalendar(data.operations);
     updateCategoryFilterOptions();
@@ -616,6 +735,10 @@ async function loadUserSettings() {
             // Sync local state with DB settings
             if (user.settings.language) changeLanguage(user.settings.language.toLowerCase());
             if (user.settings.theme) applyTheme(user.settings.theme);
+            if (user.settings.currency) {
+                currentCurrency = user.settings.currency;
+                updateSymbol(CURRENCY_SYMBOLS[currentCurrency] || "₸");
+            }
         }
     } catch (error) {
         console.error("Error loading user settings", error);
@@ -790,6 +913,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
                 applyLanguage();
                 applyTheme($("settings-theme").value);
+                currentCurrency = $("settings-currency").value;
+                updateSymbol(CURRENCY_SYMBOLS[currentCurrency] || "₸");
                 showNotification(i18n.t("addedSuccess")); // Reusing for success
             } catch (error) {
                 showNotification(i18n.translateApiError(error.detail, error.status), "error");

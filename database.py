@@ -89,8 +89,22 @@ def create_database():
                     id BIGSERIAL PRIMARY KEY,
                     email TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
+                    token_version INTEGER NOT NULL DEFAULT 0,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 )
+            """)
+
+            # 1b. Safe migration: add token_version to existing users table
+            cursor.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'users' AND column_name = 'token_version'
+                    ) THEN
+                        ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
+                    END IF;
+                END $$;
             """)
 
             # 2. Operations table — create fresh with user_id
@@ -154,6 +168,11 @@ def create_database():
                 )
             """)
 
+            # 6. Performance indexes — created IF NOT EXISTS, safe to re-run
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_operations_user_id ON {TABLE_NAME} (user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_user_id ON budgets (user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_goals_user_id ON goals (user_id)")
+
 
 # User operations
 def create_user(email: str, password_hash: str) -> int:
@@ -183,7 +202,7 @@ def get_user_by_email(email: str):
     connection = get_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, email, password_hash, created_at FROM users WHERE email = %s", (email,))
+            cursor.execute("SELECT id, email, password_hash, created_at, token_version FROM users WHERE email = %s", (email,))
             return cursor.fetchone()
     finally:
         connection.close()
@@ -193,7 +212,7 @@ def get_user_by_id(user_id: int):
     connection = get_connection()
     try:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT id, email, password_hash, created_at FROM users WHERE id = %s", (user_id,))
+            cursor.execute("SELECT id, email, password_hash, created_at, token_version FROM users WHERE id = %s", (user_id,))
             return cursor.fetchone()
     finally:
         connection.close()
@@ -243,7 +262,11 @@ def update_user_settings(user_id: int, language: str = None, theme: str = None, 
 def update_user_password(user_id: int, new_password_hash: str):
     with _transaction() as connection:
         with connection.cursor() as cursor:
-            cursor.execute("UPDATE users SET password_hash = %s WHERE id = %s", (new_password_hash, user_id))
+            # Increment token_version to invalidate all existing tokens
+            cursor.execute(
+                "UPDATE users SET password_hash = %s, token_version = token_version + 1 WHERE id = %s",
+                (new_password_hash, user_id)
+            )
 
 
 def delete_user_account(user_id: int):

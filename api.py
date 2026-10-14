@@ -4,11 +4,14 @@ import csv
 import io
 import json
 
-from fastapi import FastAPI, HTTPException, Query, Header, Depends, status
+from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, validator
 from typing import Optional
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 import database
 import auth
@@ -16,6 +19,8 @@ import auth
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 VALID_PERIODS = {"all", "today", "week", "month"}
+
+limiter = Limiter(key_func=get_remote_address)
 
 
 class UTF8JSONResponse(JSONResponse):
@@ -35,6 +40,8 @@ app = FastAPI(
     version="2.0.0",
     default_response_class=UTF8JSONResponse,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
@@ -142,6 +149,11 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not user_row:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
 
+    # Verify token_version to detect password-change invalidation
+    db_token_version = user_row[4] if len(user_row) > 4 else 0
+    if payload.get("tv", 0) != db_token_version:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Токен недействителен. Войдите снова")
+
     return {"id": user_row[0], "email": user_row[1]}
 
 
@@ -167,7 +179,8 @@ def service_worker():
 
 # --- Auth & Profile Routes ---
 @app.post("/auth/register", status_code=201)
-def register_user(payload: RegisterPayload):
+@limiter.limit("5/minute")
+def register_user(request: Request, payload: RegisterPayload):
     try:
         pwd_hash = auth.hash_password(payload.password)
         user_id = database.create_user(payload.email, pwd_hash)
@@ -176,18 +189,20 @@ def register_user(payload: RegisterPayload):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    token = auth.create_access_token({"user_id": user_id, "email": payload.email})
+    token = auth.create_access_token({"user_id": user_id, "email": payload.email, "tv": 0})
     return {"access_token": token, "token_type": "bearer", "email": payload.email}
 
 
 @app.post("/auth/login")
-def login_user(payload: LoginPayload):
+@limiter.limit("10/minute")
+def login_user(request: Request, payload: LoginPayload):
     user_row = database.get_user_by_email(payload.email)
     if not user_row or not auth.verify_password(user_row[2], payload.password):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
 
     user_id, email = user_row[0], user_row[1]
-    token = auth.create_access_token({"user_id": user_id, "email": email})
+    token_version = user_row[4] if len(user_row) > 4 else 0
+    token = auth.create_access_token({"user_id": user_id, "email": email, "tv": token_version})
     return {"access_token": token, "token_type": "bearer", "email": email}
 
 

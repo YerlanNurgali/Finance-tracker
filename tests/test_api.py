@@ -13,16 +13,18 @@ ROWS = [
     (2, "30.09.2026 11:00", "Расход", Decimal("2500.00"), "Еда"),
 ]
 
+USER = {"id": 1, "email": "test@example.com"}
+
 
 def test_api_balance_operations_and_statistics(monkeypatch):
-    monkeypatch.setattr(api, "get_operations", lambda: ROWS)
+    monkeypatch.setattr(database, "get_operations", lambda user_id: ROWS)
 
-    assert api.get_balance() == {"balance": 7500.0}
-    operations = api.list_operations("all")
+    assert api.get_balance(USER) == {"balance": 7500.0}
+    operations = api.list_operations("all", USER)
     assert operations[0]["amount"] == 10000.0
     assert operations[1]["category"] == "Еда"
 
-    statistics = api.get_statistics("all")
+    statistics = api.get_statistics("all", USER)
     assert statistics["total_income"] == 10000.0
     assert statistics["total_expense"] == 2500.0
     assert statistics["balance"] == 7500.0
@@ -30,8 +32,8 @@ def test_api_balance_operations_and_statistics(monkeypatch):
 
 
 def test_api_json_response_is_utf8(monkeypatch):
-    monkeypatch.setattr(api, "get_operations", lambda: ROWS)
-    response = api.UTF8JSONResponse(content=api.list_operations("all"))
+    monkeypatch.setattr(database, "get_operations", lambda user_id: ROWS)
+    response = api.UTF8JSONResponse(content=api.list_operations("all", USER))
 
     assert response.headers["content-type"] == "application/json; charset=utf-8"
     body = response.body.decode("utf-8")
@@ -43,7 +45,7 @@ def test_api_json_response_is_utf8(monkeypatch):
 
 def test_api_rejects_unknown_period():
     with pytest.raises(HTTPException) as error:
-        api.list_operations("year")
+        api.list_operations("year", USER)
     assert error.value.status_code == 422
 
 
@@ -58,29 +60,25 @@ def test_api_payload_validation_and_create(monkeypatch):
         api.OperationPayload(date="date", operation_type="Неверный", amount=1)
 
     calls = []
-    monkeypatch.setattr(api, "add_operation", lambda *args: calls.append(args))
+    monkeypatch.setattr(database, "add_operation", lambda *args: calls.append(args))
+    monkeypatch.setattr(database, "get_budgets", lambda user_id: [])
     payload = api.OperationPayload(date="date", operation_type="Доход", amount=5, category="Зарплата")
-    assert api.create_operation(payload)["message"] == "Операция добавлена"
-    assert calls == [("date", "Доход", 5.0, "Зарплата")]
+    assert api.create_operation(payload, USER)["message"] == "Операция добавлена"
+    assert calls == [(1, "date", "Доход", 5.0, "Зарплата")]
 
 
 def test_api_delete_and_update_not_found(monkeypatch):
     def missing(*args):
         raise database.OperationNotFound("Операция не найдена")
 
-    original_delete = api.delete_operation
-    original_update = api.update_operation
-    api.delete_operation = missing
-    api.update_operation = missing
-    try:
-        with pytest.raises(HTTPException) as delete_error:
-            api.remove_operation(99)
-        assert delete_error.value.status_code == 404
+    monkeypatch.setattr(database, "delete_operation", missing)
+    monkeypatch.setattr(database, "update_operation", missing)
 
-        payload = api.OperationPayload(date="date", operation_type="Расход", amount=1, category="Еда")
-        with pytest.raises(HTTPException) as update_error:
-            api.edit_operation_api(99, payload)
-        assert update_error.value.status_code == 404
-    finally:
-        api.delete_operation = original_delete
-        api.update_operation = original_update
+    with pytest.raises(HTTPException) as delete_error:
+        api.remove_operation(99, USER)
+    assert delete_error.value.status_code == 404
+
+    payload = api.OperationPayload(date="date", operation_type="Расход", amount=1, category="Еда")
+    with pytest.raises(HTTPException) as update_error:
+        api.modify_operation(99, payload, USER)
+    assert update_error.value.status_code == 404
