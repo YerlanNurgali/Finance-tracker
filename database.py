@@ -1,9 +1,13 @@
+import logging
 import os
+import threading
+import time
 from contextlib import contextmanager
 from decimal import Decimal
 
 try:
     import psycopg2
+    import psycopg2.pool
 except ImportError:
     psycopg2 = None
 
@@ -14,6 +18,7 @@ except ImportError:
         return False
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 TABLE_NAME = "operations"
 VALID_OPERATION_TYPES = ("Доход", "Расход")
 
@@ -38,6 +43,145 @@ class GoalNotFound(LookupError):
     pass
 
 
+def _env_positive_int(name, default):
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{name} должен быть целым положительным числом, получено: {raw!r}")
+    return value
+
+
+def _env_positive_seconds(name, default):
+    raw = os.getenv(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if not (0 < value < float("inf")):
+        raise ValueError(f"{name} должен быть положительным числом секунд, получено: {raw!r}")
+    return value
+
+
+# psycopg2 keeps at most POOL_MIN idle connections and closes the rest on
+# return, so POOL_MIN is also how many connections survive between bursts.
+POOL_MIN = _env_positive_int("DB_POOL_MIN", 5)
+POOL_MAX = _env_positive_int("DB_POOL_MAX", 10)
+POOL_TIMEOUT = _env_positive_seconds("DB_POOL_TIMEOUT", 10)
+# Applies to every connection the pool opens, so an unreachable database
+# fails fast instead of hanging startup or a request.
+CONNECT_TIMEOUT = 10
+# Neon suspends idle compute and drops its connections, so connections idle
+# longer than this are pinged before being handed out.
+POOL_IDLE_PING_SECONDS = 30
+
+_pool = None
+_pool_lock = threading.Lock()
+_last_used = {}
+
+
+class _PooledConnection:
+    """Proxy whose close() returns the connection to the pool instead of closing it."""
+
+    def __init__(self, raw, release):
+        self._raw = raw
+        self._release = release
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+    def close(self):
+        if self._raw is not None:
+            raw, self._raw = self._raw, None
+            self._release(raw)
+
+
+def _get_pool(database_url):
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                if POOL_MIN > POOL_MAX:
+                    logger.warning(
+                        "DB_POOL_MIN (%s) больше DB_POOL_MAX (%s), используется %s",
+                        POOL_MIN, POOL_MAX, POOL_MAX,
+                    )
+                pool = psycopg2.pool.ThreadedConnectionPool(
+                    min(POOL_MIN, POOL_MAX), POOL_MAX, database_url,
+                    connect_timeout=CONNECT_TIMEOUT, keepalives=1, keepalives_idle=30,
+                )
+                # ThreadedConnectionPool raises instead of waiting when empty;
+                # the semaphore makes callers wait up to POOL_TIMEOUT for a slot.
+                # It lives on the pool so late returns after close_pool() release
+                # the slot of the pool they came from.
+                pool.slots = threading.BoundedSemaphore(POOL_MAX)
+                _pool = pool
+    return _pool
+
+
+def _is_alive(connection):
+    if time.monotonic() - _last_used.get(id(connection), 0) < POOL_IDLE_PING_SECONDS:
+        return True
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        connection.rollback()
+        return True
+    except Exception:
+        return False
+
+
+def _checkin(pool, connection):
+    try:
+        discard = bool(connection.closed)
+        if not discard:
+            try:
+                connection.rollback()  # end read transactions left open by SELECTs
+            except Exception:
+                discard = True
+        _last_used[id(connection)] = time.monotonic()
+        try:
+            pool.putconn(connection, close=discard)
+        except psycopg2.pool.PoolError:
+            # close_pool() ran while this connection was in use.
+            connection.close()
+        if connection.closed:  # discarded by us or as surplus by the pool
+            _last_used.pop(id(connection), None)
+    finally:
+        pool.slots.release()
+
+
+def _checkout(pool):
+    if not pool.slots.acquire(timeout=POOL_TIMEOUT):
+        raise RuntimeError("Пул подключений к базе данных исчерпан")
+    try:
+        connection = pool.getconn()
+        # After Neon suspends, every idle connection is dead, so keep discarding
+        # until a live one turns up. At most maxconn idle connections exist, so
+        # the last getconn() opens a fresh connection.
+        for _ in range(pool.maxconn):
+            if not connection.closed and _is_alive(connection):
+                break
+            _last_used.pop(id(connection), None)
+            pool.putconn(connection, close=True)
+            connection = pool.getconn()
+    except Exception:
+        pool.slots.release()
+        raise
+    return _PooledConnection(connection, lambda raw: _checkin(pool, raw))
+
+
+def close_pool():
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            _pool.closeall()
+            _pool = None
+            _last_used.clear()
+
+
 def get_connection():
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -46,7 +190,7 @@ def get_connection():
         if os.getenv("TESTING") == "true":
             return None
         raise RuntimeError("Не установлена зависимость psycopg2-binary")
-    return psycopg2.connect(database_url)
+    return _checkout(_get_pool(database_url))
 
 
 @contextmanager
@@ -56,9 +200,16 @@ def _transaction():
         yield connection
         if connection:
             connection.commit()
-    except Exception:
+    except Exception as exc:
         if connection:
-            connection.rollback()
+            try:
+                connection.rollback()
+            except Exception as rollback_exc:
+                # Keep the original error primary; report the rollback failure
+                # alongside it instead of letting it replace the original.
+                logger.error("Rollback после ошибки транзакции не удался", exc_info=rollback_exc)
+                if hasattr(exc, "add_note"):  # Python 3.11+
+                    exc.add_note(f"Rollback также не удался: {rollback_exc!r}")
         raise
     finally:
         if connection:

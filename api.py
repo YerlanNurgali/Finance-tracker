@@ -162,6 +162,11 @@ def startup():
     database.create_database()
 
 
+@app.on_event("shutdown")
+def shutdown():
+    database.close_pool()
+
+
 @app.get("/")
 def serve_frontend():
     return FileResponse(FRONTEND_DIR / "index.html")

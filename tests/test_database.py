@@ -138,3 +138,49 @@ def test_transaction_rolls_back_and_closes_on_database_error(monkeypatch):
         database.add_operation(USER_ID, "date", "Доход", 10)
     assert connection.rolled_back is True
     assert connection.closed == 1
+
+
+class BrokenRollbackConnection(Connection):
+    def __init__(self, commit_error=None):
+        super().__init__([])
+        self.commit_error = commit_error
+
+    def commit(self):
+        if self.commit_error:
+            raise self.commit_error
+
+    def rollback(self):
+        raise ConnectionError("rollback failure")
+
+
+def _assert_rollback_error_reported(caplog, error):
+    records = [r for r in caplog.records if r.name == "database" and r.exc_info]
+    assert len(records) == 1
+    rollback_exc = records[0].exc_info[1]
+    assert isinstance(rollback_exc, ConnectionError)
+    assert str(rollback_exc) == "rollback failure"
+    if hasattr(error, "add_note"):  # Python 3.11+
+        assert any("rollback failure" in note for note in error.__notes__)
+
+
+def test_query_error_stays_primary_when_rollback_also_fails(monkeypatch, caplog):
+    connection = BrokenRollbackConnection()
+    monkeypatch.setattr(database, "get_connection", lambda: connection)
+
+    with pytest.raises(ValueError, match="query failure") as raised:
+        with database._transaction():
+            raise ValueError("query failure")
+
+    _assert_rollback_error_reported(caplog, raised.value)
+    assert connection.closed == 1
+
+
+def test_commit_error_stays_primary_when_rollback_also_fails(monkeypatch, caplog):
+    connection = BrokenRollbackConnection(commit_error=RuntimeError("commit failure"))
+    monkeypatch.setattr(database, "get_connection", lambda: connection)
+
+    with pytest.raises(RuntimeError, match="commit failure") as raised:
+        database.add_operation(USER_ID, "date", "Доход", 10)
+
+    _assert_rollback_error_reported(caplog, raised.value)
+    assert connection.closed == 1
