@@ -47,7 +47,20 @@ app = FastAPI(
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+# The frontend files carry no version in their URLs, so browsers must
+# revalidate them (a cheap 304 via ETag) instead of guessing a freshness
+# lifetime; otherwise a deploy can leave a stale index.html or script.js.
+FRONTEND_CACHE_HEADERS = {"Cache-Control": "no-cache"}
+
+
+class RevalidatedStaticFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers.update(FRONTEND_CACHE_HEADERS)
+        return response
+
+
+app.mount("/static", RevalidatedStaticFiles(directory=FRONTEND_DIR), name="static")
 
 
 # Pydantic models
@@ -174,7 +187,7 @@ def shutdown():
 
 @app.get("/")
 def serve_frontend():
-    return FileResponse(FRONTEND_DIR / "index.html")
+    return FileResponse(FRONTEND_DIR / "index.html", headers=FRONTEND_CACHE_HEADERS)
 
 
 @app.get("/health")
@@ -184,7 +197,7 @@ def health():
 
 @app.get("/service-worker.js")
 def service_worker():
-    return FileResponse(FRONTEND_DIR / "service-worker.js", media_type="application/javascript")
+    return FileResponse(FRONTEND_DIR / "service-worker.js", media_type="application/javascript", headers=FRONTEND_CACHE_HEADERS)
 
 
 # --- Auth & Profile Routes ---

@@ -60,7 +60,11 @@ function localData() {
 }
 
 function saveLocalData(data) {
-    localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(data));
+    try {
+        localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(data));
+    } catch (_) {
+        // Storage can be full or disabled; the snapshot is only an offline fallback.
+    }
 }
 
 function applyTheme(theme = getStoredTheme()) {
@@ -653,30 +657,44 @@ async function deleteGoal(id) {
 
 async function loadDashboard() {
     $("operations-list").replaceChildren(createState(i18n.t("loadingOperations"), "loading-state"));
+    // Budgets and goals load on their own and show their own errors: a failure
+    // there must not hide fresh operations and balance behind an old snapshot.
+    const secondary = Promise.all([loadBudgets(), loadGoals()]);
+    let data;
     try {
-        const [balance, statistics, operations, budgets, goals] = await Promise.all([
+        const [balance, statistics, operations] = await Promise.all([
             request("/balance"),
             request(`/statistics?period=${currentPeriod}`),
-            request(`/operations?period=${currentPeriod}`),
-            request("/budgets"),
-            request("/goals")
+            request(`/operations?period=${currentPeriod}`)
         ]);
-        currentDashboard = { balance: balance.balance, ...statistics, operations };
-        saveLocalData(currentDashboard);
-        renderDashboard(currentDashboard);
-        renderBudgets(budgets);
-        renderGoals(goals);
+        data = { balance: balance.balance, ...statistics, operations };
     } catch (error) {
-        const data = localData();
-        if (data) {
-            currentDashboard = data;
-            renderDashboard(data);
+        // Offline or server error: fall back to the last dashboard that rendered.
+        const cached = localData();
+        if (cached) {
+            currentDashboard = cached;
+            renderDashboard(cached);
             showNotification(i18n.t("loadError"), "error");
         } else {
             $("operations-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
             showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
+        await secondary;
+        return;
     }
+    currentDashboard = data;
+    try {
+        renderDashboard(data);
+    } catch (error) {
+        // Show the failure instead of an endless loading state or stale data.
+        console.error("Dashboard render failed", error);
+        $("operations-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
+        showNotification(i18n.t("loadError"), "error");
+        await secondary;
+        return;
+    }
+    saveLocalData(data);  // only a dashboard that rendered becomes the offline snapshot
+    await secondary;
 }
 
 function resetForm() {
@@ -1019,12 +1037,13 @@ async function confirmImport() {
         setImportBusy(false);
         renderImportReport();
         showImportStep("report");
-        loadDashboard();
     } catch (error) {
         setImportBusy(false);
         renderImportPreview();
         showImportError(error);
+        return;
     }
+    await loadDashboard();
 }
 
 function openImportModal() {
@@ -1042,6 +1061,8 @@ function closeImportModal() {
 }
 
 function setupImport() {
+    // A stale cached page may lack the import markup; never let that stop the app.
+    if (!$("import-modal") || !$("import-csv-btn")) return;
     $("import-csv-btn").onclick = openImportModal;
     $("import-close-btn").onclick = closeImportModal;
     $("import-finish-btn").onclick = closeImportModal;
