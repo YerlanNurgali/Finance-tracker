@@ -24,6 +24,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export DATABASE_URL='postgresql://user:password@host/dbname?sslmode=require'
+export SECRET_KEY='длинная-случайная-строка'  # например: python3 -c "import secrets; print(secrets.token_hex(32))"
 uvicorn api:app --reload
 ```
 
@@ -54,13 +55,13 @@ python3 -m pytest -q
 - `PUT /operations/{id}` и `DELETE /operations/{id}`
 - `GET /balance`, `GET /statistics`, `GET /export/csv`, `GET /health`
 
-Расходы требуют категорию, суммы должны быть положительными. Ошибки валидации возвращаются с HTTP 422, неизвестная операция — с HTTP 404.
+Расходы требуют категорию, суммы должны быть положительными и помещаться в `NUMERIC(14, 2)`: от 0,01 до 999 999 999 999,99 после округления до копеек. Ошибки валидации возвращаются с HTTP 422, неизвестная операция — с HTTP 404.
 
 ## Neon и Render
 
-Создание таблицы выполняется при старте приложения через `CREATE TABLE IF NOT EXISTS`; существующие записи не удаляются. На Render можно использовать включённый `render.yaml`: добавьте секретный `DATABASE_URL` в Environment и не коммитьте `.env`. Push из проекта не выполняется автоматически.
+Создание таблицы выполняется при старте приложения через `CREATE TABLE IF NOT EXISTS`; существующие записи не удаляются. На Render можно использовать включённый `render.yaml`: добавьте секретные `DATABASE_URL` и `SECRET_KEY` в Environment и не коммитьте `.env`. `SECRET_KEY` подписывает токены входа: без него каждый запуск создаёт случайный ключ, и все пользователи выходят из системы после перезапуска — при старте в лог пишется предупреждение. Лимиты `/auth/login` и `/auth/register` считаются по IP клиента; за прокси Render uvicorn видит реальный IP только при `--forwarded-allow-ips` (или переменной `FORWARDED_ALLOW_IPS`), иначе все клиенты делят один лимит. Push из проекта не выполняется автоматически.
 
-Service worker имеет версию кэша `v6`, удаляет старые версии при активации и использует сеть с fallback на кэш, поэтому обновления JavaScript не застревают в старом кэше.
+Service worker имеет версию кэша `v9`, удаляет старые версии при активации и использует сеть с fallback на кэш, поэтому обновления JavaScript не застревают в старом кэше.
 
 Frontend использует CSS variables для единого design system, поддерживает фильтрацию истории без дополнительного запроса и позволяет переключать светлую/тёмную тему без перезагрузки. Версия service worker обновляется при изменении frontend-ресурсов.
 

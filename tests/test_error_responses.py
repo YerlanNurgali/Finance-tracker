@@ -242,3 +242,98 @@ def test_a_non_finite_value_is_echoed_as_text(signed_in):
                               headers={"Content-Type": "application/json"})
     assert response.status_code == 422
     assert response.json()["detail"][0]["input"] == "nan"
+
+
+# --- Amounts the NUMERIC(14, 2) columns cannot store are invalid input ------------
+
+def _no_database(monkeypatch):
+    monkeypatch.setattr(database, "get_connection", raising(AssertionError("the database must not be reached")))
+
+
+@pytest.mark.parametrize("call,message", [
+    (lambda: database.add_operation(1, "16.10.2026", "Расход", 0.001, "Еда"), "Сумма должна быть больше нуля"),
+    (lambda: database.add_operation(1, "16.10.2026", "Доход", 1e15, None), "Сумма слишком большая"),
+    (lambda: database.update_operation(1, 1, "16.10.2026", "Доход", "1000000000000", None), "Сумма слишком большая"),
+    (lambda: database.add_budget(1, "Еда", 0.004), "Сумма бюджета должна быть больше нуля"),
+    (lambda: database.update_budget(1, 1, 1e13), "Сумма слишком большая"),
+    (lambda: database.add_goal(1, "Цель", 1e13), "Сумма слишком большая"),
+    (lambda: database.add_goal(1, "Цель", 100, -1), "Накопленная сумма не может быть отрицательной"),
+    (lambda: database.update_goal_progress(1, 1, 1e13), "Сумма слишком большая"),
+    (lambda: database.update_goal_progress(1, 1, "nan"), "Сумма должна быть числом"),
+    (lambda: database.add_budget(1, "Еда", "inf"), "Сумма бюджета должна быть числом"),
+])
+def test_amounts_the_database_cannot_store_are_invalid_input(monkeypatch, call, message):
+    _no_database(monkeypatch)
+    with pytest.raises(database.InvalidInput) as raised:
+        call()
+    assert str(raised.value) == message
+
+
+@pytest.mark.parametrize("value,stored", [
+    ("10", "10.00"), (0.005, "0.01"), ("1 000,50", "1000.50"), ("1 000", "1000.00"),
+    ("999999999999.99", "999999999999.99"),
+])
+def test_accepted_amounts_are_rounded_to_cents_as_the_database_would(value, stored):
+    assert str(database._money(value, "x")) == stored
+
+
+def test_an_amount_too_large_is_a_422_with_its_message(signed_in, monkeypatch):
+    _no_database(monkeypatch)
+    response = signed_in.post("/operations", json={**OPERATION, "amount": 1e15})
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Сумма слишком большая"
+
+
+# --- Passwords are never echoed back in validation errors --------------------------
+
+PASSWORD = "Unique-Pa55-marker"
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("POST", "/auth/register", {"email": "n@example.test", "password": "Uniq"}),
+    ("POST", "/auth/register", {"email": "bad", "password": PASSWORD}),
+    ("POST", "/auth/register", {"password": PASSWORD}),
+    ("POST", "/auth/login", {"email": "u@example.test", "password": [PASSWORD]}),
+    ("POST", "/auth/login", {"password": PASSWORD}),
+    ("POST", "/auth/login", [{"email": "u@example.test", "password": PASSWORD}]),
+    ("PUT", "/auth/password", {"current_password": PASSWORD, "new_password": "Uniq"}),
+    ("PUT", "/auth/password", {"current_password": PASSWORD}),
+    ("DELETE", "/auth/delete", {"password": {"nested": PASSWORD}}),
+])
+def test_validation_errors_never_echo_passwords(signed_in, method, path, body):
+    api.limiter.reset()
+    response = signed_in.request(method, path, json=body)
+    assert response.status_code == 422
+    assert PASSWORD not in response.text and '"Uniq"' not in response.text
+    assert response.json()["detail"], "the client still learns which field is wrong"
+
+
+def test_other_fields_are_still_echoed(signed_in):
+    response = signed_in.post("/budgets", json={"category": "Еда", "amount": -5, "period": "month"})
+    assert response.json()["detail"][0]["input"] == -5
+
+
+@pytest.mark.parametrize("call,message", [
+    (lambda: database.add_operation(1, "16.10.2026", "Доход", "-5", None), "Сумма должна быть больше нуля"),
+    (lambda: database.add_operation(1, "16.10.2026", "Доход", "-1e400", None), "Сумма должна быть больше нуля"),
+    (lambda: database.add_operation(1, "16.10.2026", "Доход", "-0", None), "Сумма должна быть больше нуля"),
+    (lambda: database.add_operation(1, "16.10.2026", "Доход", "999999999999.995", None), "Сумма слишком большая"),
+    (lambda: database.add_operation(1, "16.10.2026", "Доход", "sNaN", None), "Сумма должна быть числом"),
+    (lambda: database.add_operation(1, "16.10.2026", "Доход", float("-inf"), None), "Сумма должна быть числом"),
+    (lambda: database.update_goal_progress(1, 1, "-1e400"), "Накопленная сумма не может быть отрицательной"),
+    (lambda: database.add_goal(1, "Цель", "-0.004"), "Целевая сумма должна быть больше нуля"),
+])
+def test_negative_and_edge_amounts_get_their_own_message(monkeypatch, call, message):
+    _no_database(monkeypatch)
+    with pytest.raises(database.InvalidInput) as raised:
+        call()
+    assert str(raised.value) == message
+
+
+@pytest.mark.parametrize("value,stored", [
+    ("999999999999.994", "999999999999.99"), ("2.675", "2.68"), ("1.005", "1.01"), (12.345, "12.35"),
+    ("1E+2", "100.00"), ("0.0049999", "0.00"),
+])
+def test_rounding_matches_postgresql_numeric(value, stored):
+    # Checked against PostgreSQL 18: SELECT value::numeric::numeric(14, 2).
+    assert str(database._money(value, "x")) == stored

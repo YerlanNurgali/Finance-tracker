@@ -6,7 +6,11 @@ import base64
 import json
 from datetime import datetime, timedelta
 
-SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_hex(32))
+# Without a configured key every process signs with its own random one, so
+# tokens stop working after a restart. An empty value is treated as missing:
+# an empty HMAC key would let anyone sign tokens.
+SECRET_KEY_CONFIGURED = bool(os.getenv("SECRET_KEY"))
+SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 
 def hash_password(password: str) -> str:
     """Hash password using PBKDF2-HMAC-SHA256 with a random salt."""

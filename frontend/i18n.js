@@ -66,6 +66,7 @@
             health: "Здоровье",
             other: "Другое",
             positiveAmountRequired: "Сумма должна быть больше нуля",
+            amountTooLarge: "Сумма слишком большая",
             expenseCategoryRequired: "Для расхода нужна категория",
             invalidOperationType: "Недопустимый тип операции",
             operationNotFound: "Операция не найдена",
@@ -282,6 +283,7 @@
             health: "Health",
             other: "Other",
             positiveAmountRequired: "Amount must be greater than zero",
+            amountTooLarge: "The amount is too large",
             expenseCategoryRequired: "A category is required for an expense",
             invalidOperationType: "Invalid operation type",
             operationNotFound: "Operation not found",
@@ -498,6 +500,7 @@
             health: "Денсаулық",
             other: "Басқа",
             positiveAmountRequired: "Сома нөлден үлкен болуы керек",
+            amountTooLarge: "Сома тым үлкен",
             expenseCategoryRequired: "Шығыс үшін санат қажет",
             invalidOperationType: "Операция түрі жарамсыз",
             operationNotFound: "Операция табылмады",
@@ -679,6 +682,7 @@
 
     const apiErrorKeys = {
         "Сумма должна быть больше нуля": "positiveAmountRequired",
+        "Сумма слишком большая": "amountTooLarge",
         "Для расхода нужна категория": "expenseCategoryRequired",
         "Недопустимый тип операции": "invalidOperationType",
         "Операция не найдена": "operationNotFound",

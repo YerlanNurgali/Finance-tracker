@@ -446,6 +446,25 @@ class TestHttpTokenVersion(_HttpBase):
         # Old token rejected
         self.assertEqual(self.client.get("/auth/me", headers=h).status_code, 401)
 
+    def test_password_change_returns_a_token_for_this_session(self):
+        old_h = self._headers(self._register().json()["access_token"])
+        r = self.client.put("/auth/password",
+                            json={"current_password": "Secret123!", "new_password": "NewPwd456!"},
+                            headers=old_h)
+        self.assertEqual(r.status_code, 200)
+        new_h = self._headers(r.json()["access_token"])
+        self.assertEqual(self.client.get("/auth/me", headers=new_h).status_code, 200)
+        self.assertEqual(self.client.get("/auth/me", headers=old_h).status_code, 401)
+
+    def test_wrong_current_password_returns_no_token(self):
+        h = self._headers(self._register().json()["access_token"])
+        r = self.client.put("/auth/password",
+                            json={"current_password": "wrong", "new_password": "NewPwd456!"},
+                            headers=h)
+        self.assertEqual(r.status_code, 401)
+        self.assertNotIn("access_token", r.text)
+        self.assertEqual(self.client.get("/auth/me", headers=h).status_code, 200)
+
     def test_new_token_valid_after_password_change(self):
         self._register()
         old_h = self._headers(self._login().json()["access_token"])

@@ -58,6 +58,8 @@ class Element {
     querySelectorAll() { return []; }
     addEventListener() {}
     focus() {}
+    click() { this.clicked = true; }
+    remove() { this.removed = true; }
 }
 
 function textNode(text) {
@@ -75,7 +77,8 @@ function jsonResponse(status, body) {
         json: async () => {
             if (body === NO_BODY) throw new SyntaxError("Unexpected end of JSON input");
             return body;
-        }
+        },
+        blob: async () => ({ blobOf: body })
     };
 }
 
@@ -93,10 +96,17 @@ function createApp({ routes = {}, ids = [...DASHBOARD_IDS, ...IMPORT_IDS], stora
     };
     const store = new Map(Object.entries(storage));
     const calls = [];
+    const downloads = [];
+    const revoked = [];
+    const timers = [];
     const context = {
         console,
         Intl,
         URLSearchParams,
+        URL: {
+            createObjectURL: (blob) => { downloads.push({ blob }); return `blob:finance.test/${downloads.length}`; },
+            revokeObjectURL: (url) => revoked.push(url)
+        },
         Node: Element,
         Option: class extends Element {
             constructor(text = "", value = "") { super("option"); this.ownText = text; this.value = value; }
@@ -108,7 +118,8 @@ function createApp({ routes = {}, ids = [...DASHBOARD_IDS, ...IMPORT_IDS], stora
             querySelector: () => null,
             querySelectorAll: (selector) => queries[selector] || [],
             addEventListener: (type, handler) => { listeners[type] = handler; },
-            documentElement: new Element("html")
+            documentElement: new Element("html"),
+            body: new Element("body")
         },
         localStorage: {
             getItem: (key) => (store.has(key) ? store.get(key) : null),
@@ -119,12 +130,12 @@ function createApp({ routes = {}, ids = [...DASHBOARD_IDS, ...IMPORT_IDS], stora
         location: { origin: "http://finance.test", reload: () => reloads.push(Date.now()) },
         scrollTo() {},
         getComputedStyle: () => ({ getPropertyValue: () => "" }),
-        setTimeout: () => 0,
+        setTimeout: (callback) => timers.push(callback),
         clearTimeout() {},
         confirm: () => true,
         fetch: async (url, options = {}) => {
             const { pathname, search } = new URL(url);
-            calls.push({ path: pathname + search, method: options.method || "GET", body: options.body });
+            calls.push({ path: pathname + search, method: options.method || "GET", body: options.body, headers: options.headers });
             const handler = routes[`${options.method || "GET"} ${pathname}`];
             if (!handler) return jsonResponse(404, { detail: "Not found" });
             const [status, body] = typeof handler === "function" ? await handler() : handler;
@@ -136,7 +147,7 @@ function createApp({ routes = {}, ids = [...DASHBOARD_IDS, ...IMPORT_IDS], stora
     vm.createContext(context);
     SOURCES.forEach((source) => vm.runInContext(source, context));
     return {
-        context, elements, store, calls, reloads,
+        context, elements, store, calls, reloads, downloads, revoked, timers,
         el: lookup,
         init: () => listeners.DOMContentLoaded(),
         run: (code) => vm.runInContext(code, context)
@@ -970,3 +981,142 @@ test("before sign-in the switcher changes the language without calling the serve
     assert.equal(app.run("i18n.getLanguage()"), "kk");
     assert.ok(!app.calls.some((call) => call.path === "/auth/profile"));
 });
+
+// Export ----------------------------------------------------------------------
+
+const exportLinks = (app) => app.context.document.body.children.filter((node) => node.tagName === "A");
+
+test("export sends the session token and saves the file", async () => {
+    const app = await boot({ "GET /export/csv": [200, "ID,Дата"] });
+    await app.el("export-csv-btn").onclick();
+    const call = app.calls.find((entry) => entry.path === "/export/csv?period=all");
+    assert.ok(call, "the export is requested for the current period");
+    assert.equal(call.headers.Authorization, "Bearer test-token");
+    assert.equal(app.downloads.length, 1);
+    assert.equal(app.downloads[0].blob.blobOf, "ID,Дата");
+    const [link] = exportLinks(app);
+    assert.equal(link.download, "finance_export_all.csv");
+    assert.ok(link.clicked && link.removed, "the file is saved and the helper link removed");
+});
+
+test("Excel and PDF exports use their own file names", async () => {
+    const app = await boot({ "GET /export/excel": [200, "x"], "GET /export/pdf": [200, "y"] });
+    await app.el("export-excel-btn").onclick();
+    await app.el("export-pdf-btn").onclick();
+    assert.deepEqual(exportLinks(app).map((link) => link.download), ["finance_export_all.xlsx", "finance_export_all.pdf"]);
+});
+
+test("a failed export shows a notification instead of leaving the app", async () => {
+    const app = await boot({ "GET /export/excel": [500, { detail: "openpyxl не установлен" }] });
+    await app.el("export-excel-btn").onclick();
+    assert.equal(app.downloads.length, 0);
+    assert.equal(app.el("notification").className, "notification error");
+    assert.equal(notice(app), app.run('i18n.translateApiError("", 500)'));
+    assert.equal(app.store.get("finance_tracker_token"), "test-token", "still signed in");
+});
+
+test("an export that finishes after sign-out is not saved", async () => {
+    const late = deferred();
+    const app = await boot({ "GET /export/csv": () => late.promise });
+    const pending = app.el("export-csv-btn").onclick();
+    await signOut(app);
+    late.release([200, "previous user's data"]);
+    await pending;
+    assert.equal(app.downloads.length, 0);
+});
+
+// Password change, double submission, sign-in errors ---------------------------
+
+test("after a password change the session continues on the new token", async () => {
+    const app = await boot({
+        "PUT /auth/password": [200, { message: "Пароль изменен", access_token: "rotated-token", token_type: "bearer" }]
+    });
+    app.el("current-password").value = "secret12";
+    app.el("new-password").value = "secret34";
+    await app.el("change-password-btn").onclick();
+    assert.equal(app.store.get("finance_tracker_token"), "rotated-token");
+    await app.run("loadDashboard()");
+    const last = app.calls[app.calls.length - 1];
+    assert.equal(last.headers.Authorization, "Bearer rotated-token");
+    assert.equal(app.el("current-password").value, "");
+});
+
+for (const [button, path, fill] of [
+    ["save-operation-btn", "POST /operations", (app) => { app.el("operation-amount").value = "10"; app.el("operation-category").value = "Еда"; }],
+    ["save-budget-btn", "POST /budgets", (app) => { app.el("budget-category").value = "Еда"; app.el("budget-amount").value = "100"; }],
+    ["save-goal-btn", "POST /goals", (app) => { app.el("goal-title").value = "Отпуск"; app.el("goal-target").value = "1000"; }]
+]) {
+    test(`a double click on ${button} saves once`, async () => {
+        const slow = deferred();
+        const app = await boot({ [path]: () => slow.promise });
+        fill(app);
+        const first = app.el(button).onclick();
+        const second = app.el(button).onclick();
+        assert.equal(app.el(button).disabled, true, "the button waits for the request");
+        slow.release([201, { message: "ok", notification: null }]);
+        await Promise.all([first, second]);
+        await settle();
+        const [method, route] = path.split(" ");
+        assert.equal(app.calls.filter((call) => call.method === method && call.path === route).length, 1);
+        assert.equal(app.el(button).disabled, false, "the button is usable again");
+    });
+}
+
+test("a failed save re-enables the button", async () => {
+    const app = await boot({ "POST /operations": [422, { detail: "Сумма должна быть больше нуля" }] });
+    app.el("operation-amount").value = "0";
+    await app.el("save-operation-btn").onclick();
+    assert.equal(app.el("save-operation-btn").disabled, false);
+});
+
+test("a sign-up rejected by field validation shows a readable message", async () => {
+    const app = await boot({
+        "POST /auth/register": [422, { detail: [{ type: "string_too_short", loc: ["body", "password"], msg: "String should have at least 6 characters" }] }]
+    }, { storage: {} });
+    app.run('authMode = "register"');
+    app.el("auth-email").value = "new@example.test";
+    app.el("auth-password").value = "1";
+    await app.el("auth-form").onsubmit({ preventDefault() {} });
+    assert.equal(app.el("auth-error").textContent, app.run('i18n.translateApiError("", 422)'));
+    assert.ok(!app.el("auth-error").textContent.includes("[object"));
+});
+
+test("a sign-up for a taken email keeps the server message", async () => {
+    const app = await boot({ "POST /auth/register": [400, { detail: "Пользователь с таким email уже существует" }] }, { storage: {} });
+    app.run('authMode = "register"');
+    app.el("auth-email").value = "taken@example.test";
+    app.el("auth-password").value = "secret12";
+    await app.el("auth-form").onsubmit({ preventDefault() {} });
+    assert.equal(app.el("auth-error").textContent, "Пользователь с таким email уже существует");
+});
+
+test("the object URL of a saved export is released", async () => {
+    const app = await boot({ "GET /export/csv": [200, "ID"] });
+    await app.el("export-csv-btn").onclick();
+    assert.deepEqual(app.revoked, [], "not before the browser has started the download");
+    app.timers.forEach((callback) => callback());
+    assert.deepEqual(app.revoked, ["blob:finance.test/1"]);
+});
+
+test("a second click on an export button while it runs sends no second request", async () => {
+    const slow = deferred();
+    const app = await boot({ "GET /export/pdf": () => slow.promise });
+    const first = app.el("export-pdf-btn").onclick();
+    const second = app.el("export-pdf-btn").onclick();
+    assert.equal(app.el("export-pdf-btn").disabled, true);
+    slow.release([200, "pdf"]);
+    await Promise.all([first, second]);
+    assert.equal(app.calls.filter((call) => call.path.startsWith("/export/pdf")).length, 1);
+    assert.equal(app.downloads.length, 1);
+    assert.equal(app.el("export-pdf-btn").disabled, false);
+});
+
+for (const status of [401, 404, 422, 500, 503]) {
+    test(`an export answered with HTTP ${status} is never saved as a file`, async () => {
+        const app = await boot({ "GET /export/csv": [status, { detail: "x" }] });
+        await app.el("export-csv-btn").onclick();
+        assert.equal(app.downloads.length, 0);
+        assert.equal(exportLinks(app).length, 0);
+        assert.equal(app.el("export-csv-btn").disabled, false);
+    });
+}

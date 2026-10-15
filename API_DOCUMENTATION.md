@@ -85,7 +85,8 @@ Base URL: `http://localhost:8000` (or your production domain on Render)
     "new_password": "newsecurepassword456"
   }
   ```
-- **Response**: `200 OK` `{"message": "Пароль изменен"}`
+- **Response**: `200 OK` `{"message": "Пароль изменен", "access_token": "<token>", "token_type": "bearer"}`
+- Смена пароля отзывает все прежние токены; текущая сессия продолжает работу с `access_token` из ответа.
 
 ### Delete Account
 - **URL**: `DELETE /auth/delete`

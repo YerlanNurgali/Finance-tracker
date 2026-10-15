@@ -283,6 +283,11 @@ function clearDashboardView() {
 const CREDENTIAL_ERRORS = ["Неверный текущий пароль", "Неверный пароль", "Неверный email или пароль"];
 
 async function request(path, options = {}) {
+    return (await requestResponse(path, options)).json();
+}
+
+// Like request(), but hands back the response itself, for files.
+async function requestResponse(path, options = {}) {
     const generation = sessionGeneration;
     const token = localStorage.getItem(TOKEN_KEY);
     const headers = {
@@ -313,7 +318,49 @@ async function request(path, options = {}) {
         }
         throw error;
     }
-    return response.json();
+    return response;
+}
+
+// A second click while the request is still running would save the same
+// operation, budget or goal twice (or fetch an export twice), so the button
+// waits for the first one.
+function oncePerClick(button, handler) {
+    let running = false;
+    return async (...args) => {
+        if (running) return;
+        running = true;
+        button.disabled = true;
+        try {
+            return await handler(...args);
+        } finally {
+            running = false;
+            button.disabled = false;
+        }
+    };
+}
+
+const EXPORT_EXTENSIONS = { csv: "csv", excel: "xlsx", pdf: "pdf" };
+
+// A plain link cannot send the Authorization header, so the file is fetched
+// with it and then saved from memory.
+async function downloadExport(format) {
+    const generation = sessionGeneration;
+    const period = currentPeriod;
+    try {
+        const response = await requestResponse(`/export/${format}?period=${encodeURIComponent(period)}`);
+        const blob = await response.blob();
+        if (!isCurrentSession(generation)) return;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `finance_export_${period}.${EXPORT_EXTENSIONS[format]}`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
+    }
 }
 
 function isCurrentSession(generation) {
@@ -1304,7 +1351,7 @@ document.addEventListener("DOMContentLoaded", () => {
         $("budget-form").classList.add("hidden");
         $("budget-amount").value = "";
     };
-    $("save-budget-btn").onclick = async () => {
+    $("save-budget-btn").onclick = oncePerClick($("save-budget-btn"), async () => {
         const payload = {
             category: $("budget-category").value,
             amount: Number($("budget-amount").value),
@@ -1324,7 +1371,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) {
             if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
-    };
+    });
 
     $("add-goal-btn").onclick = () => {
         $("goal-form").classList.remove("hidden");
@@ -1337,7 +1384,7 @@ document.addEventListener("DOMContentLoaded", () => {
         $("goal-current").value = "0";
         $("goal-deadline").value = "";
     };
-    $("save-goal-btn").onclick = async () => {
+    $("save-goal-btn").onclick = oncePerClick($("save-goal-btn"), async () => {
         const payload = {
             title: $("goal-title").value.trim(),
             target_amount: Number($("goal-target").value),
@@ -1361,11 +1408,11 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) {
             if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
-    };
+    });
     document.querySelectorAll(".type-tab").forEach((button) => {
         button.onclick = () => setFormType(button.dataset.operationType);
     });
-    $("save-operation-btn").onclick = async () => {
+    $("save-operation-btn").onclick = oncePerClick($("save-operation-btn"), async () => {
         const wasEditing = editingOperationId !== null;
         const payload = {
             date: new Date().toLocaleString("ru-RU", { hour12: false }),
@@ -1388,7 +1435,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (error) {
             if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
-    };
+    });
     document.querySelectorAll(".filter-btn").forEach((button) => {
         button.onclick = () => {
             document.querySelectorAll(".filter-btn").forEach((item) => item.classList.remove("active"));
@@ -1401,9 +1448,9 @@ document.addEventListener("DOMContentLoaded", () => {
         select.onchange = () => currentDashboard && renderOperations(currentDashboard.operations);
     });
     $("operation-search").oninput = () => currentDashboard && renderOperations(currentDashboard.operations);
-    $("export-csv-btn").onclick = () => { window.location.href = `/export/csv?period=${currentPeriod}`; };
-    $("export-excel-btn").onclick = () => { window.location.href = `/export/excel?period=${currentPeriod}`; };
-    $("export-pdf-btn").onclick = () => { window.location.href = `/export/pdf?period=${currentPeriod}`; };
+    $("export-csv-btn").onclick = oncePerClick($("export-csv-btn"), () => downloadExport("csv"));
+    $("export-excel-btn").onclick = oncePerClick($("export-excel-btn"), () => downloadExport("excel"));
+    $("export-pdf-btn").onclick = oncePerClick($("export-pdf-btn"), () => downloadExport("pdf"));
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/service-worker.js");
     applyLanguage();
 
@@ -1434,7 +1481,10 @@ document.addEventListener("DOMContentLoaded", () => {
             showNotification(authMode === "login" ? "Успешный вход!" : "Аккаунт успешно создан!");
             startSession();
         } catch (error) {
-            $("auth-error").textContent = error.detail || "Ошибка аутентификации";
+            // FastAPI lists invalid fields (e.g. a short password) as objects, not text.
+            $("auth-error").textContent = typeof error.detail === "string" && error.detail
+                ? error.detail
+                : i18n.translateApiError("", error.status);
         }
     };
 
@@ -1475,7 +1525,7 @@ document.addEventListener("DOMContentLoaded", () => {
         $("change-password-btn").onclick = async () => {
             const generation = sessionGeneration;
             try {
-                await request("/auth/password", {
+                const res = await request("/auth/password", {
                     method: "PUT",
                     body: JSON.stringify({
                         current_password: $("current-password").value,
@@ -1483,6 +1533,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     })
                 });
                 if (!isCurrentSession(generation)) return;
+                // The old token is revoked by the change; keep this session on the new one.
+                if (res.access_token) localStorage.setItem(TOKEN_KEY, res.access_token);
                 showNotification(i18n.t("passwordChangedSuccess"));
                 $("current-password").value = "";
                 $("new-password").value = "";

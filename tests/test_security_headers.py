@@ -336,3 +336,47 @@ def test_the_app_never_runs_in_debug_mode():
     # reaches the client, and the response carries none of the security headers
     # or no-store. Debug mode must therefore never be switched on.
     assert api.app.debug is False
+
+
+# --- Token signing key ------------------------------------------------------------
+
+def _reload_auth(monkeypatch, value):
+    import importlib
+    import auth
+    if value is None:
+        monkeypatch.delenv("SECRET_KEY", raising=False)
+    else:
+        monkeypatch.setenv("SECRET_KEY", value)
+    reloaded = importlib.reload(auth)
+    return reloaded
+
+
+@pytest.fixture
+def restore_auth():
+    import importlib
+    import auth
+    original = auth.SECRET_KEY, auth.SECRET_KEY_CONFIGURED
+    yield
+    importlib.reload(auth)
+    auth.SECRET_KEY, auth.SECRET_KEY_CONFIGURED = original
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_a_missing_or_empty_key_is_never_used_to_sign(monkeypatch, restore_auth, value):
+    auth = _reload_auth(monkeypatch, value)
+    assert auth.SECRET_KEY_CONFIGURED is False
+    assert len(auth.SECRET_KEY) == 64, "a random key is used instead of an empty one"
+
+
+@pytest.mark.parametrize("value,warning", [
+    (None, "SECRET_KEY не задан"), ("sh0rt-K3y-marker", "SECRET_KEY короче 32 символов"), ("k3y-" * 16, None),
+])
+def test_startup_warns_about_the_signing_key_without_revealing_it(monkeypatch, restore_auth, caplog, value, warning):
+    _reload_auth(monkeypatch, value)
+    api.warn_about_configuration()
+    if warning:
+        assert warning in caplog.text
+    else:
+        assert "SECRET_KEY" not in caplog.text
+    if value:
+        assert value not in caplog.text

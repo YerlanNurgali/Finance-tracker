@@ -148,11 +148,36 @@ def _json_safe(value):
     return value
 
 
+def _is_password_field(name):
+    return isinstance(name, str) and "password" in name.lower()
+
+
+def _without_passwords(value):
+    if isinstance(value, dict):
+        return {key: "***" if _is_password_field(key) else _without_passwords(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_without_passwords(item) for item in value]
+    return value
+
+
+def _safe_validation_error(error):
+    error = dict(error)
+    if "input" in error:
+        if any(_is_password_field(part) for part in error.get("loc", ())):
+            del error["input"]
+        else:
+            # A missing or misplaced field echoes the enclosing object, which may
+            # hold a password next to it.
+            error["input"] = _without_passwords(error["input"])
+    return _json_safe(error)
+
+
 async def request_validation_error(request, exc):
-    """FastAPI's own 422 response, except that it echoes the submitted value:
-    Python's JSON parser accepts NaN and Infinity, which cannot be written back
-    as JSON, so those are echoed as strings instead of failing with a 500."""
-    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(_json_safe(exc.errors()))})
+    """FastAPI's own 422 response, with two changes to the echoed input: passwords
+    are never sent back, and NaN and Infinity (accepted by Python's JSON parser,
+    but not writable as JSON) are echoed as strings instead of failing with a 500."""
+    errors = [_safe_validation_error(error) for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
 
 app = FastAPI(
@@ -309,8 +334,17 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     return {"id": user_row[0], "email": user_row[1]}
 
 
+def warn_about_configuration():
+    if not auth.SECRET_KEY_CONFIGURED:
+        logger.warning("SECRET_KEY не задан: токены подписываются случайным ключом "
+                       "и перестанут действовать после перезапуска")
+    elif len(auth.SECRET_KEY) < 32:
+        logger.warning("SECRET_KEY короче 32 символов: используйте длинный случайный ключ")
+
+
 @app.on_event("startup")
 def startup():
+    warn_about_configuration()
     database.create_database()
 
 
@@ -386,7 +420,11 @@ def change_password(payload: PasswordChangePayload, current_user: dict = Depends
 
     new_hash = auth.hash_password(payload.new_password)
     database.update_user_password(current_user["id"], new_hash)
-    return {"message": "Пароль изменен"}
+    # The change revokes every earlier token, this session's too, so it gets a
+    # new one instead of being signed out on its next request.
+    user_row = database.get_user_by_id(current_user["id"])
+    token = auth.create_access_token({"user_id": user_row[0], "email": user_row[1], "tv": user_row[4]})
+    return {"message": "Пароль изменен", "access_token": token, "token_type": "bearer"}
 
 
 @app.delete("/auth/delete")
@@ -793,6 +831,23 @@ def remove_goal(goal_id: int, current_user: dict = Depends(get_current_user)):
 
 
 # --- Export Routes ---
+# A spreadsheet runs a cell that starts with one of these as a formula.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _spreadsheet_text(value):
+    """User text is exported as text: the leading quote keeps a category such as
+    =HYPERLINK(...) from running as a formula when the file is opened."""
+    if isinstance(value, str) and value.startswith(FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
+def _export_row(row):
+    operation_id, date, operation_type, amount, category = row
+    return [operation_id, _spreadsheet_text(date), operation_type, amount, _spreadsheet_text(category)]
+
+
 @app.get("/export/csv")
 def export_csv(period: str = Query("all"), current_user: dict = Depends(get_current_user)):
     rows = _rows(current_user["id"], period)
@@ -800,7 +855,7 @@ def export_csv(period: str = Query("all"), current_user: dict = Depends(get_curr
     writer = csv.writer(output)
     writer.writerow(["ID", "Дата", "Тип", "Сумма", "Категория"])
     for row in rows:
-        writer.writerow(row)
+        writer.writerow(_export_row(row))
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
@@ -822,7 +877,8 @@ def export_excel(period: str = Query("all"), current_user: dict = Depends(get_cu
     ws.title = "Операции"
     ws.append(["ID", "Дата", "Тип", "Сумма", "Категория"])
     for row in rows:
-        ws.append([row[0], row[1], row[2], float(row[3]), row[4] or ""])
+        operation_id, date, operation_type, amount, category = _export_row(row)
+        ws.append([operation_id, date, operation_type, float(amount), category or ""])
 
     file_stream = io.BytesIO()
     wb.save(file_stream)

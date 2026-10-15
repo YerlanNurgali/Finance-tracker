@@ -3,7 +3,7 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 try:
     import psycopg2
@@ -26,6 +26,32 @@ VALID_OPERATION_TYPES = ("Доход", "Расход")
 class InvalidInput(ValueError):
     """Data the user sent is not acceptable. The message is meant for the client;
     any other ValueError (configuration, driver) is an internal error."""
+
+
+# The amount columns are NUMERIC(14, 2): a cent is the smallest step and this
+# the largest value they hold. Anything else would fail in the database.
+CENT = Decimal("0.01")
+MAX_AMOUNT = Decimal("999999999999.99")
+AMOUNT_TOO_LARGE = "Сумма слишком большая"
+
+
+def _money(value, not_a_number):
+    """The amount as the database will store it, rounded to cents."""
+    try:
+        amount = Decimal(str(value).replace(" ", "").replace("\u00a0", "").replace(",", "."))
+    except Exception as exc:
+        raise InvalidInput(not_a_number) from exc
+    if not amount.is_finite():
+        raise InvalidInput(not_a_number)
+    if amount < 0:
+        return amount  # every caller rejects negative amounts with its own message
+    if amount >= MAX_AMOUNT + CENT:
+        raise InvalidInput(AMOUNT_TOO_LARGE)  # also keeps quantize() within Decimal's precision
+    # PostgreSQL rounds half away from zero; .995 past the maximum overflows there too.
+    amount = amount.quantize(CENT, rounding=ROUND_HALF_UP)
+    if amount > MAX_AMOUNT:
+        raise InvalidInput(AMOUNT_TOO_LARGE)
+    return amount
 
 
 class OperationNotFound(LookupError):
@@ -222,10 +248,7 @@ def _transaction():
 
 
 def _validate_operation(operation_type, amount, category):
-    try:
-        amount = Decimal(str(amount).replace(" ", "").replace(" ", "").replace(",", "."))
-    except Exception as exc:
-        raise InvalidInput("Сумма должна быть числом") from exc
+    amount = _money(amount, "Сумма должна быть числом")
     if amount <= 0:
         raise InvalidInput("Сумма должна быть больше нуля")
     if operation_type not in VALID_OPERATION_TYPES:
@@ -559,10 +582,7 @@ def get_budgets(user_id: int):
 
 
 def add_budget(user_id: int, category: str, amount, period: str = 'month'):
-    try:
-        amount = Decimal(str(amount).replace(" ", "").replace(" ", "").replace(",", "."))
-    except Exception as exc:
-        raise InvalidInput("Сумма бюджета должна быть числом") from exc
+    amount = _money(amount, "Сумма бюджета должна быть числом")
     if amount <= 0:
         raise InvalidInput("Сумма бюджета должна быть больше нуля")
     category = category.strip()
@@ -576,10 +596,7 @@ def add_budget(user_id: int, category: str, amount, period: str = 'month'):
 
 
 def update_budget(budget_id: int, user_id: int, amount):
-    try:
-        amount = Decimal(str(amount).replace(" ", "").replace(" ", "").replace(",", "."))
-    except Exception as exc:
-        raise InvalidInput("Сумма бюджета должна быть числом") from exc
+    amount = _money(amount, "Сумма бюджета должна быть числом")
     if amount <= 0:
         raise InvalidInput("Сумма бюджета должна быть больше нуля")
 
@@ -619,13 +636,12 @@ def get_goals(user_id: int):
 
 
 def add_goal(user_id: int, title: str, target_amount, current_amount=0, deadline=None):
-    try:
-        target_amount = Decimal(str(target_amount).replace(" ", "").replace(" ", "").replace(",", "."))
-        current_amount = Decimal(str(current_amount).replace(" ", "").replace(" ", "").replace(",", "."))
-    except Exception as exc:
-        raise InvalidInput("Суммы цели должны быть числами") from exc
+    target_amount = _money(target_amount, "Суммы цели должны быть числами")
+    current_amount = _money(current_amount, "Суммы цели должны быть числами")
     if target_amount <= 0:
         raise InvalidInput("Целевая сумма должна быть больше нуля")
+    if current_amount < 0:
+        raise InvalidInput("Накопленная сумма не может быть отрицательной")
     title = title.strip()
 
     with _transaction() as connection:
@@ -637,10 +653,7 @@ def add_goal(user_id: int, title: str, target_amount, current_amount=0, deadline
 
 
 def update_goal_progress(goal_id: int, user_id: int, current_amount):
-    try:
-        current_amount = Decimal(str(current_amount).replace(" ", "").replace(" ", "").replace(",", "."))
-    except Exception as exc:
-        raise InvalidInput("Сумма должна быть числом") from exc
+    current_amount = _money(current_amount, "Сумма должна быть числом")
     if current_amount < 0:
         raise InvalidInput("Накопленная сумма не может быть отрицательной")
 
