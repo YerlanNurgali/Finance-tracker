@@ -29,5 +29,6 @@ def test_revalidation_still_gets_not_modified(client):
     assert response.status_code == 304
 
 
-def test_api_responses_are_not_affected(client):
-    assert "cache-control" not in client.get("/health").headers
+def test_api_responses_are_not_revalidated_but_never_stored(client):
+    # The frontend's no-cache does not leak to the API, whose responses are no-store.
+    assert client.get("/health").headers["cache-control"] == "no-store"

@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import os
 
 from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -14,6 +15,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import MutableHeaders
+from starlette.responses import PlainTextResponse
 
 import bank_import
 import database
@@ -40,11 +43,108 @@ class UTF8JSONResponse(JSONResponse):
         ).encode("utf-8")
 
 
+def api_docs_enabled():
+    """Interactive API docs are a local development aid. Render sets RENDER=true
+    on its services, so they are off there unless API_DOCS says otherwise."""
+    explicit = os.getenv("API_DOCS")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("RENDER", "").strip().lower() != "true"
+
+
+API_DOCS_ENABLED = api_docs_enabled()
+# Only the two interactive docs pages need an inline script/style and a CDN, so
+# only they go without the policy. /openapi.json is JSON, and Swagger UI's
+# /docs/oauth2-redirect is used solely for OAuth2 sign-in, which this API lacks.
+CSP_EXEMPT_DOCS_PATHS = {"/docs", "/redoc"} if API_DOCS_ENABLED else set()
+
+# The frontend loads nothing from other origins and has no inline scripts or
+# styles, so everything is limited to this origin.
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self'",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "manifest-src 'self'",
+    "worker-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+
+
+def is_frontend_path(path):
+    return path == "/" or path == "/service-worker.js" or path.startswith("/static/")
+
+
+def security_headers_for(path):
+    """The headers every response for ``path`` must carry."""
+    headers = {
+        name: value for name, value in SECURITY_HEADERS.items()
+        if not (name == "Content-Security-Policy" and path in CSP_EXEMPT_DOCS_PATHS)
+    }
+    if not is_frontend_path(path):
+        # API responses carry the user's financial data and settings; the
+        # frontend files keep their own no-cache + ETag revalidation.
+        headers["Cache-Control"] = "no-store"
+    return headers
+
+
+class SecurityHeadersMiddleware:
+    """Adds the security headers to every response that passes through it.
+
+    A plain ASGI middleware (not BaseHTTPMiddleware), so request bodies such as
+    CSV uploads stream through untouched. Starlette's outermost
+    ServerErrorMiddleware answers unhandled exceptions itself, outside this
+    middleware: that answer gets its headers from ``internal_server_error``.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        extra = security_headers_for(scope["path"])
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in extra.items():
+                    headers.setdefault(name, value)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+async def internal_server_error(request, exc):
+    """Starlette hands an ``Exception`` handler to ServerErrorMiddleware, which
+    sends this response only if none has started yet and then re-raises for the
+    server log. The exception text never reaches the client."""
+    return PlainTextResponse("Internal Server Error", status_code=500,
+                             headers=security_headers_for(request.url.path))
+
+
 app = FastAPI(
     title="Finance Tracker API v2",
     version="2.0.0",
     default_response_class=UTF8JSONResponse,
+    docs_url="/docs" if API_DOCS_ENABLED else None,
+    redoc_url="/redoc" if API_DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if API_DOCS_ENABLED else None,
 )
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_exception_handler(Exception, internal_server_error)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # The frontend files carry no version in their URLs, so browsers must

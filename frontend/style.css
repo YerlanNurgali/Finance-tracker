@@ -114,6 +114,9 @@ h2 { margin-bottom: 0; font-size: 1.2rem; letter-spacing: -.02em; }
 .primary-button:hover { background: color-mix(in srgb, var(--accent) 88%, #000); transform: translateY(-1px); }
 .secondary-button { border: 1px solid var(--border); background: var(--surface-secondary); color: var(--text); }
 .secondary-button:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+/* Kept as strong as the former inline style: the danger colours stay on hover. */
+.secondary-button.danger-button, .secondary-button.danger-button:hover { color: var(--danger); border-color: var(--danger); }
+.danger-zone-field { margin-bottom: 12px; }
 .icon-button { min-width: 38px; min-height: 38px; padding: 6px; border-radius: 9px; font-size: 1.05rem; transition: background var(--transition), color var(--transition), transform var(--transition); }
 .icon-button:hover { background: var(--surface-secondary); transform: translateY(-1px); }
 .delete-operation-btn { color: var(--danger); }
