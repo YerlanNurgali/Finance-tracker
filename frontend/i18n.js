@@ -219,7 +219,11 @@
             monthlyTrend: "Тренд по месяцам",
             monthlyTrendChart: "Тренд доходов и расходов по месяцам",
             notEnoughData: "Недостаточно данных",
-            deleteGoal: "Удалить цель"
+            deleteGoal: "Удалить цель",
+            settingsLoadError: "Не удалось загрузить настройки профиля",
+            wrongCurrentPassword: "Неверный текущий пароль",
+            wrongPassword: "Неверный пароль",
+            invalidCredentials: "Неверный email или пароль"
         },
         en: {
             appName: "Finance Tracker",
@@ -431,7 +435,11 @@
             monthlyTrend: "Monthly trend",
             monthlyTrendChart: "Monthly income and expense trend",
             notEnoughData: "Not enough data",
-            deleteGoal: "Delete goal"
+            deleteGoal: "Delete goal",
+            settingsLoadError: "Could not load your profile settings",
+            wrongCurrentPassword: "The current password is incorrect",
+            wrongPassword: "Incorrect password",
+            invalidCredentials: "Incorrect email or password"
         },
         kk: {
             appName: "Finance Tracker",
@@ -643,7 +651,11 @@
             monthlyTrend: "Айлық динамика",
             monthlyTrendChart: "Кірістер мен шығыстардың айлық динамикасы",
             notEnoughData: "Деректер жеткіліксіз",
-            deleteGoal: "Мақсатты жою"
+            deleteGoal: "Мақсатты жою",
+            settingsLoadError: "Профиль баптаулары жүктелмеді",
+            wrongCurrentPassword: "Ағымдағы құпиясөз қате",
+            wrongPassword: "Құпиясөз қате",
+            invalidCredentials: "Email немесе құпиясөз қате"
         }
     };
 
@@ -682,7 +694,10 @@
         "Недопустимые настройки импорта": "importInvalidSettings",
         "Укажите значения типа для доходов и расходов": "importTypeValuesRequired",
         "Настройте столбцы для импорта": "importRequiredHint",
-        "Не удалось сохранить импорт. Данные не изменены": "importSaveFailed"
+        "Не удалось сохранить импорт. Данные не изменены": "importSaveFailed",
+        "Неверный текущий пароль": "wrongCurrentPassword",
+        "Неверный пароль": "wrongPassword",
+        "Неверный email или пароль": "invalidCredentials"
     };
 
     let currentLanguage = DEFAULT_LANGUAGE;

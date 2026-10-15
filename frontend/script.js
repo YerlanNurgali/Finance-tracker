@@ -51,19 +51,35 @@ function formatDate(dateString) {
     return new Intl.DateTimeFormat(LOCALES[i18n.getLanguage()], { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+// The snapshot belongs to the account that saved it: another user of the same
+// browser must never see it, so it is tagged with the email and checked on read.
 function localData() {
     try {
-        return JSON.parse(localStorage.getItem(LOCAL_DATA_KEY));
+        const stored = JSON.parse(localStorage.getItem(LOCAL_DATA_KEY));
+        const owner = localStorage.getItem(USER_EMAIL_KEY);
+        if (stored && owner && stored.owner === owner && stored.dashboard) return stored.dashboard;
     } catch (_) {
-        return null;
+        // A broken snapshot is treated like a missing one.
     }
+    clearLocalData();
+    return null;
 }
 
 function saveLocalData(data) {
+    const owner = localStorage.getItem(USER_EMAIL_KEY);
+    if (!owner) return;
     try {
-        localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify(data));
+        localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify({ owner, dashboard: data }));
     } catch (_) {
         // Storage can be full or disabled; the snapshot is only an offline fallback.
+    }
+}
+
+function clearLocalData() {
+    try {
+        localStorage.removeItem(LOCAL_DATA_KEY);
+    } catch (_) {
+        // Nothing to clear when storage is disabled.
     }
 }
 
@@ -171,11 +187,16 @@ function renderUserBadge() {
         area.replaceChildren();
         const badge = document.createElement("div");
         badge.className = "user-badge";
-        badge.innerHTML = `<span>👤 ${email}</span><button type="button" id="logout-btn">Выйти</button>`;
+        const label = document.createElement("span");
+        label.textContent = `👤 ${email}`;
+        const logoutButton = document.createElement("button");
+        logoutButton.type = "button";
+        logoutButton.id = "logout-btn";
+        logoutButton.textContent = "Выйти";
+        badge.append(label, logoutButton);
         area.appendChild(badge);
-        $("logout-btn").onclick = () => {
-            localStorage.removeItem(TOKEN_KEY);
-            localStorage.removeItem(USER_EMAIL_KEY);
+        logoutButton.onclick = () => {
+            clearSession();
             renderUserBadge();
             showAuthModal();
         };
@@ -190,7 +211,79 @@ function renderUserBadge() {
     }
 }
 
+// Incremented whenever the session ends, so responses to requests started by
+// the previous account are dropped instead of being drawn for the next one.
+let sessionGeneration = 0;
+
+// The settings form may only be saved once it shows this account's settings.
+let settingsReady = false;
+const DEFAULT_SETTINGS = { language: "RU", theme: "light", currency: "KZT" };
+
+function setSettingsReady(ready) {
+    settingsReady = ready;
+    if ($("save-settings-btn")) $("save-settings-btn").disabled = !ready;
+}
+
+function clearSession() {
+    sessionGeneration += 1;
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_EMAIL_KEY);
+    clearLocalData();
+    currentDashboard = null;
+    currentCurrency = DEFAULT_SETTINGS.currency;
+    updateSymbol(CURRENCY_SYMBOLS[currentCurrency]);
+    setSettingsReady(false);
+    clearDashboardView();
+}
+
+// Removes the previous user's figures from the page, which stays visible
+// behind the sign-in dialog.
+function clearDashboardView() {
+    ["operations-list", "period-summary-content", "categories-list", "calendar-grid",
+        "budgets-list", "goals-list", "settings-email", "import-sample", "import-preview-table",
+        "import-errors", "import-report-errors", "import-summary", "import-report", "import-preview-more"
+    ].forEach((id) => $(id)?.replaceChildren());
+    ["balance", "summary-balance", "total-income", "total-expense"].forEach((id) => {
+        if ($(id)) $(id).textContent = formatMoney(0);
+    });
+    if ($("calendar-details")) $("calendar-details").textContent = i18n.t("noOperationsOnDate");
+    ["expenses-chart", "trend-chart"].forEach((id) => {
+        const canvas = $(id);
+        const context = canvas && canvas.getContext ? canvas.getContext("2d") : null;
+        if (context) context.clearRect(0, 0, canvas.width, canvas.height);
+    });
+    // Unsent input of the previous user: passwords, half-filled forms, the email
+    // in the sign-in form.
+    ["operation-search", "operation-type-filter", "operation-category-filter", "operation-amount",
+        "current-password", "new-password", "delete-password", "budget-amount", "goal-title",
+        "goal-target", "goal-deadline", "auth-email", "auth-password", "import-income-values", "import-expense-values"
+    ].forEach((id) => {
+        if ($(id)) $(id).value = "";
+    });
+    if ($("goal-current")) $("goal-current").value = "0";
+    if ($("auth-error")) $("auth-error").textContent = "";
+    for (const [field, value] of Object.entries(DEFAULT_SETTINGS)) {
+        if ($(`settings-${field}`)) $(`settings-${field}`).value = value;
+    }
+    editingOperationId = null;
+    ["operation-form", "budget-form", "goal-form"].forEach((id) => $(id)?.classList.add("hidden"));
+    // Column choices are built from the previous file's CSV headers.
+    Object.values(IMPORT_COLUMN_FIELDS).forEach((id) => $(id)?.replaceChildren());
+    if ($("import-modal")) {
+        $("import-modal").hidden = true;
+        setImportBusy(false);  // a request cut short by sign-out must not leave it locked
+        if ($("import-error")) $("import-error").textContent = "";
+        if ($("import-file")) $("import-file").value = "";
+    }
+    Object.assign(importState, { file: null, columns: [], sample: [], currency: "", preview: null, report: null, step: "file" });
+}
+
+// 401 answers that only say "the password typed into this form is wrong". The
+// session itself is still valid, so they must not sign the user out.
+const CREDENTIAL_ERRORS = ["Неверный текущий пароль", "Неверный пароль", "Неверный email или пароль"];
+
 async function request(path, options = {}) {
+    const generation = sessionGeneration;
     const token = localStorage.getItem(TOKEN_KEY);
     const headers = {
         "Content-Type": "application/json",
@@ -198,13 +291,6 @@ async function request(path, options = {}) {
         ...(options.headers || {})
     };
     const response = await fetch(`${API_URL}${path}`, { ...options, headers });
-    if (response.status === 401) {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_EMAIL_KEY);
-        renderUserBadge();
-        showAuthModal();
-        throw new Error("Unauthorized");
-    }
     if (!response.ok) {
         let detail = "";
         try {
@@ -215,9 +301,23 @@ async function request(path, options = {}) {
         const error = new Error(detail || i18n.translateApiError("", response.status));
         error.status = response.status;
         error.detail = detail;
+        if (response.status === 401 && !CREDENTIAL_ERRORS.includes(detail)) {
+            // Missing, expired or revoked token. A late answer to a request of an
+            // earlier session must not end the session that replaced it.
+            error.sessionEnded = true;
+            if (generation === sessionGeneration) {
+                clearSession();
+                renderUserBadge();
+                showAuthModal();
+            }
+        }
         throw error;
     }
     return response.json();
+}
+
+function isCurrentSession(generation) {
+    return generation === sessionGeneration;
 }
 
 function showNotification(message, type = "success") {
@@ -528,8 +628,12 @@ function renderCalendar(operations) {
             if (dayOps.length === 0) {
                 details.textContent = `${dateKey}: ${i18n.t("noOperationsOnDate")}`;
             } else {
-                const list = dayOps.map(op => `${i18n.translateOperationType(op.type)}: ${formatMoney(op.amount)} (${op.category || '-'})`).join("<br>");
-                details.innerHTML = `<strong>${dateKey}:</strong><br>${list}`;
+                const heading = document.createElement("strong");
+                heading.textContent = `${dateKey}:`;
+                details.replaceChildren(heading);
+                dayOps.forEach(op => {
+                    details.append(document.createElement("br"), `${i18n.translateOperationType(op.type)}: ${formatMoney(op.amount)} (${op.category || '-'})`);
+                });
             }
         };
         grid.appendChild(cell);
@@ -538,12 +642,36 @@ function renderCalendar(operations) {
 
 
 async function loadBudgets() {
+    const generation = sessionGeneration;
     try {
         const budgets = await request("/budgets");
-        renderBudgets(budgets);
+        if (generation === sessionGeneration) renderBudgets(budgets);
     } catch (error) {
-        $("budgets-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
+        if (generation === sessionGeneration) $("budgets-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
     }
+}
+
+function createBlock(className, ...children) {
+    const block = document.createElement("div");
+    block.className = className;
+    block.append(...children);
+    return block;
+}
+
+function createText(tag, text) {
+    const element = document.createElement(tag);
+    element.textContent = text;
+    return element;
+}
+
+function createIconButton(label, onClick) {
+    const button = document.createElement("button");
+    button.className = "icon-button";
+    button.type = "button";
+    button.setAttribute("aria-label", label);
+    button.textContent = "×";
+    button.onclick = onClick;
+    return button;
 }
 
 function renderBudgets(budgets) {
@@ -556,31 +684,28 @@ function renderBudgets(budgets) {
     budgets.forEach(budget => {
         const item = document.createElement("div");
         item.className = "budget-item";
-        item.innerHTML = `
-            <div class="budget-header">
-                <span>${i18n.translateCategory(budget.category)}</span>
-                <button class="icon-button" type="button" aria-label="${i18n.t("deleteBudget")}">×</button>
-            </div>
-            <div class="budget-progress-bg">
-                <div class="budget-progress-fill ${budget.exceeded ? 'exceeded' : ''}" style="width: ${Math.min(100, budget.percent)}%"></div>
-            </div>
-            <div class="budget-footer">
-                <span>${i18n.t("spentOf", { spent: formatMoney(budget.spent), amount: formatMoney(budget.amount) })}</span>
-                <span>${budget.percent}%</span>
-            </div>
-        `;
-        item.querySelector("button").onclick = () => deleteBudget(budget.id);
+        const header = createBlock("budget-header",
+            createText("span", i18n.translateCategory(budget.category)),
+            createIconButton(i18n.t("deleteBudget"), () => deleteBudget(budget.id)));
+        const fill = createBlock(`budget-progress-fill ${budget.exceeded ? 'exceeded' : ''}`);
+        fill.style.width = `${Math.min(100, Number(budget.percent) || 0)}%`;
+        const footer = createBlock("budget-footer",
+            createText("span", i18n.t("spentOf", { spent: formatMoney(budget.spent), amount: formatMoney(budget.amount) })),
+            createText("span", `${budget.percent}%`));
+        item.append(header, createBlock("budget-progress-bg", fill), footer);
         container.appendChild(item);
     });
 }
 
 async function deleteBudget(id) {
+    const generation = sessionGeneration;
     try {
         await request(`/budgets/${id}`, { method: "DELETE" });
+        if (!isCurrentSession(generation)) return;
         await loadBudgets();
         showNotification(i18n.t("deletedSuccess"));
     } catch (error) {
-        showNotification(i18n.translateApiError(error.detail, error.status), "error");
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
     }
 }
 
@@ -591,11 +716,12 @@ function updateBudgetCategoryOptions() {
 }
 
 async function loadGoals() {
+    const generation = sessionGeneration;
     try {
         const goals = await request("/goals");
-        renderGoals(goals);
+        if (generation === sessionGeneration) renderGoals(goals);
     } catch (error) {
-        $("goals-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
+        if (generation === sessionGeneration) $("goals-list").replaceChildren(createState(i18n.t("loadError"), "error-state"));
     }
 }
 
@@ -609,49 +735,55 @@ function renderGoals(goals) {
     goals.forEach(goal => {
         const item = document.createElement("div");
         item.className = "goal-item";
-        item.innerHTML = `
-            <div class="goal-header">
-                <span>${goal.title}</span>
-                <button class="icon-button" type="button" aria-label="${i18n.t("deleteGoal")}">×</button>
-            </div>
-            <div class="goal-progress-bg">
-                <div class="goal-progress-fill" style="width: ${goal.progress_percent}%"></div>
-            </div>
-            <div class="goal-footer">
-                <span>${i18n.t("currentAmount")}: ${formatMoney(goal.current_amount)} / ${formatMoney(goal.target_amount)}</span>
-                <span>${goal.progress_percent}%</span>
-            </div>
-            <div class="goal-update" style="display: flex; gap: 8px; margin-top: 8px;">
-                <input type="number" class="goal-progress-input" placeholder="${i18n.t("updateProgress")}" min="0" style="width: 100%;">
-                <button class="secondary-button" type="button">${i18n.t("save")}</button>
-            </div>
-        `;
-        item.querySelector(".icon-button").onclick = () => deleteGoal(goal.id);
-        item.querySelector(".secondary-button").onclick = () => updateGoalProgress(goal.id, item.querySelector('.goal-progress-input').value);
+        const header = createBlock("goal-header",
+            createText("span", goal.title),
+            createIconButton(i18n.t("deleteGoal"), () => deleteGoal(goal.id)));
+        const fill = createBlock("goal-progress-fill");
+        fill.style.width = `${Number(goal.progress_percent) || 0}%`;
+        const footer = createBlock("goal-footer",
+            createText("span", `${i18n.t("currentAmount")}: ${formatMoney(goal.current_amount)} / ${formatMoney(goal.target_amount)}`),
+            createText("span", `${goal.progress_percent}%`));
+        const input = document.createElement("input");
+        input.type = "number";
+        input.className = "goal-progress-input";
+        input.placeholder = i18n.t("updateProgress");
+        input.min = "0";
+        input.style.width = "100%";
+        const saveButton = createText("button", i18n.t("save"));
+        saveButton.className = "secondary-button";
+        saveButton.type = "button";
+        saveButton.onclick = () => updateGoalProgress(goal.id, input.value);
+        const update = createBlock("goal-update", input, saveButton);
+        Object.assign(update.style, { display: "flex", gap: "8px", marginTop: "8px" });
+        item.append(header, createBlock("goal-progress-bg", fill), footer, update);
         container.appendChild(item);
     });
 }
 
 async function updateGoalProgress(id, value) {
+    const generation = sessionGeneration;
     try {
         await request(`/goals/${id}/progress`, {
             method: "PUT",
             body: JSON.stringify({ current_amount: Number(value) })
         });
+        if (!isCurrentSession(generation)) return;
         await loadGoals();
         showNotification(i18n.t("updatedSuccess"));
     } catch (error) {
-        showNotification(i18n.translateApiError(error.detail, error.status), "error");
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
     }
 }
 
 async function deleteGoal(id) {
+    const generation = sessionGeneration;
     try {
         await request(`/goals/${id}`, { method: "DELETE" });
+        if (!isCurrentSession(generation)) return;
         await loadGoals();
         showNotification(i18n.t("deletedSuccess"));
     } catch (error) {
-        showNotification(i18n.translateApiError(error.detail, error.status), "error");
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
     }
 }
 
@@ -660,6 +792,7 @@ async function loadDashboard() {
     // Budgets and goals load on their own and show their own errors: a failure
     // there must not hide fresh operations and balance behind an old snapshot.
     const secondary = Promise.all([loadBudgets(), loadGoals()]);
+    const generation = sessionGeneration;
     let data;
     try {
         const [balance, statistics, operations] = await Promise.all([
@@ -669,6 +802,7 @@ async function loadDashboard() {
         ]);
         data = { balance: balance.balance, ...statistics, operations };
     } catch (error) {
+        if (generation !== sessionGeneration) return;  // signed out meanwhile
         // Offline or server error: fall back to the last dashboard that rendered.
         const cached = localData();
         if (cached) {
@@ -682,6 +816,7 @@ async function loadDashboard() {
         await secondary;
         return;
     }
+    if (generation !== sessionGeneration) return;  // signed out meanwhile
     currentDashboard = data;
     try {
         renderDashboard(data);
@@ -723,12 +858,43 @@ function editOperation(operation) {
 
 async function deleteOperation(id) {
     if (!confirm(i18n.t("deleteConfirmation"))) return;
+    const generation = sessionGeneration;
     try {
         await request(`/operations/${id}`, { method: "DELETE" });
+        if (!isCurrentSession(generation)) return;
         await loadDashboard();
         showNotification(i18n.t("deletedSuccess"));
     } catch (error) {
-        showNotification(i18n.translateApiError(error.detail, error.status), "error");
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
+    }
+}
+
+// The interface uses the i18n codes ru / en / kk. The server stores RU / EN / KZ,
+// and profiles saved by older versions may hold KK: convert only at that border.
+const SERVER_LANGUAGE_CODES = { ru: "RU", en: "EN", kk: "KZ" };
+
+function languageFromServer(code) {
+    const value = String(code || "").trim().toLowerCase();
+    const language = value === "kz" ? "kk" : value;
+    return i18n.SUPPORTED_LANGUAGES.includes(language) ? language : null;
+}
+
+function languageForServer(language) {
+    return SERVER_LANGUAGE_CODES[language] || SERVER_LANGUAGE_CODES[i18n.DEFAULT_LANGUAGE];
+}
+
+// The header switcher: applies the language at once and, once this account's
+// settings are known, stores it in the profile so it survives a reload.
+async function selectLanguage(language) {
+    changeLanguage(language);
+    if (!settingsReady) return;
+    const code = languageForServer(i18n.getLanguage());
+    if ($("settings-language")) $("settings-language").value = code;
+    const generation = sessionGeneration;
+    try {
+        await request("/auth/profile", { method: "PUT", body: JSON.stringify({ language: code }) });
+    } catch (error) {
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
     }
 }
 
@@ -742,25 +908,48 @@ function toggleTheme() {
     applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 }
 
+// The account's settings (currency above all) must be in place before its
+// figures are drawn, so a session always loads them first.
+async function startSession() {
+    const generation = sessionGeneration;
+    setSettingsReady(false);
+    await loadUserSettings();
+    // An authorisation failure ended the session: there is no dashboard to load.
+    if (!isCurrentSession(generation)) return;
+    await loadDashboard();
+}
+
+// Returns whether this account's settings were applied. On failure nothing is
+// applied and saving stays disabled, so the defaults set at sign-out remain.
 async function loadUserSettings() {
+    const generation = sessionGeneration;
     try {
         const user = await request("/auth/me");
+        if (generation !== sessionGeneration) return false;
         if ($("settings-email")) $("settings-email").textContent = user.email;
         if (user.settings) {
-            if ($("settings-language")) $("settings-language").value = user.settings.language || "RU";
+            const language = languageFromServer(user.settings.language);
+            if ($("settings-language")) $("settings-language").value = languageForServer(language);
             if ($("settings-theme")) $("settings-theme").value = user.settings.theme || "light";
             if ($("settings-currency")) $("settings-currency").value = user.settings.currency || "KZT";
 
-            // Sync local state with DB settings
-            if (user.settings.language) changeLanguage(user.settings.language.toLowerCase());
-            if (user.settings.theme) applyTheme(user.settings.theme);
+            // Sync local state with DB settings. Currency goes first: changing the
+            // language re-renders the dashboard, which must use this user's currency.
             if (user.settings.currency) {
                 currentCurrency = user.settings.currency;
                 updateSymbol(CURRENCY_SYMBOLS[currentCurrency] || "₸");
             }
+            if (language) changeLanguage(language);
+            if (user.settings.theme) applyTheme(user.settings.theme);
         }
+        setSettingsReady(true);
+        return true;
     } catch (error) {
-        console.error("Error loading user settings", error);
+        if (generation === sessionGeneration && !error.sessionEnded) {
+            console.error("Error loading user settings", error);
+            showNotification(i18n.t("settingsLoadError"), "error");
+        }
+        return false;
     }
 }
 
@@ -989,9 +1178,11 @@ function refreshImportLanguage() {
 }
 
 async function loadImportStructure(useSuggestions) {
+    const generation = sessionGeneration;
     setImportBusy(true);
     try {
         const data = await sendImport("/import/csv/preview", false);
+        if (generation !== sessionGeneration) return;  // signed out meanwhile
         importState.columns = data.columns;
         importState.sample = data.sample;
         importState.currency = data.currency;
@@ -1000,6 +1191,7 @@ async function loadImportStructure(useSuggestions) {
         renderImportSample();
         showImportStep("mapping");
     } catch (error) {
+        if (generation !== sessionGeneration) return;
         setImportBusy(false);
         showImportError(error);
     }
@@ -1018,26 +1210,36 @@ async function onImportFileSelected() {
 
 async function runImportPreview() {
     if (!hasRequiredImportMapping()) return showImportError(i18n.t("importRequiredHint"));
+    const generation = sessionGeneration;
     setImportBusy(true);
     try {
-        importState.preview = await sendImport("/import/csv/preview", true);
+        const preview = await sendImport("/import/csv/preview", true);
+        if (generation !== sessionGeneration) return;  // signed out meanwhile
+        importState.preview = preview;
         setImportBusy(false);
         renderImportPreview();
         showImportStep("preview");
     } catch (error) {
+        if (generation !== sessionGeneration) return;
         setImportBusy(false);
         showImportError(error);
     }
 }
 
 async function confirmImport() {
+    const generation = sessionGeneration;
     setImportBusy(true);
     try {
-        importState.report = await sendImport("/import/csv/commit", true);
+        const report = await sendImport("/import/csv/commit", true);
+        // Signed out meanwhile: the server finished the import for the previous
+        // account, but this page now belongs to another session.
+        if (generation !== sessionGeneration) return;
+        importState.report = report;
         setImportBusy(false);
         renderImportReport();
         showImportStep("report");
     } catch (error) {
+        if (generation !== sessionGeneration) return;
         setImportBusy(false);
         renderImportPreview();
         showImportError(error);
@@ -1086,7 +1288,7 @@ document.addEventListener("DOMContentLoaded", () => {
     i18n.setLanguage(getStoredLanguage());
     applyTheme(getStoredTheme());
     document.querySelectorAll(".language-button").forEach((button) => {
-        button.onclick = () => changeLanguage(button.dataset.language);
+        button.onclick = () => selectLanguage(button.dataset.language);
     });
     $("theme-toggle").onclick = toggleTheme;
     $("notification-close").onclick = () => { $("notification").hidden = true; };
@@ -1108,17 +1310,19 @@ document.addEventListener("DOMContentLoaded", () => {
             amount: Number($("budget-amount").value),
             period: "month"
         };
+        const generation = sessionGeneration;
         try {
             await request("/budgets", {
                 method: "POST",
                 body: JSON.stringify(payload)
             });
+            if (!isCurrentSession(generation)) return;
             $("budget-form").classList.add("hidden");
             $("budget-amount").value = "";
             await loadBudgets();
             showNotification(i18n.t("addedSuccess"));
         } catch (error) {
-            showNotification(i18n.translateApiError(error.detail, error.status), "error");
+            if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
     };
 
@@ -1140,11 +1344,13 @@ document.addEventListener("DOMContentLoaded", () => {
             current_amount: Number($("goal-current").value || 0),
             deadline: $("goal-deadline").value.trim() || null
         };
+        const generation = sessionGeneration;
         try {
             await request("/goals", {
                 method: "POST",
                 body: JSON.stringify(payload)
             });
+            if (!isCurrentSession(generation)) return;
             $("goal-form").classList.add("hidden");
             $("goal-title").value = "";
             $("goal-target").value = "";
@@ -1153,7 +1359,7 @@ document.addEventListener("DOMContentLoaded", () => {
             await loadGoals();
             showNotification(i18n.t("addedSuccess"));
         } catch (error) {
-            showNotification(i18n.translateApiError(error.detail, error.status), "error");
+            if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
     };
     document.querySelectorAll(".type-tab").forEach((button) => {
@@ -1167,16 +1373,20 @@ document.addEventListener("DOMContentLoaded", () => {
             amount: Number($("operation-amount").value),
             category: $("operation-category").value || null
         };
+        const generation = sessionGeneration;
         try {
             const res = await request(wasEditing ? `/operations/${editingOperationId}` : "/operations", {
                 method: wasEditing ? "PUT" : "POST",
                 body: JSON.stringify(payload)
             });
+            // Signed out meanwhile: the server kept the operation for the previous
+            // account; its budget warning must not reach the next one.
+            if (!isCurrentSession(generation)) return;
             resetForm();
             await loadDashboard();
             showNotification(res.notification || i18n.t(wasEditing ? "updatedSuccess" : "addedSuccess"));
         } catch (error) {
-            showNotification(i18n.translateApiError(error.detail, error.status), "error");
+            if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
     };
     document.querySelectorAll(".filter-btn").forEach((button) => {
@@ -1222,43 +1432,48 @@ document.addEventListener("DOMContentLoaded", () => {
             hideAuthModal();
             renderUserBadge();
             showNotification(authMode === "login" ? "Успешный вход!" : "Аккаунт успешно создан!");
-            loadDashboard();
+            startSession();
         } catch (error) {
             $("auth-error").textContent = error.detail || "Ошибка аутентификации";
         }
     };
 
     renderUserBadge();
+    setSettingsReady(false);
     if (!localStorage.getItem(TOKEN_KEY)) {
         showAuthModal();
     } else {
-        loadDashboard();
+        startSession();
     }
 
     // Settings wiring
     if ($("save-settings-btn")) {
         $("save-settings-btn").onclick = async () => {
+            // Until this account's settings have loaded, the form may still hold
+            // defaults; saving them would overwrite the stored settings.
+            if (!settingsReady) return;
+            const generation = sessionGeneration;
+            const settings = {
+                language: $("settings-language").value,
+                theme: $("settings-theme").value,
+                currency: $("settings-currency").value
+            };
             try {
-                await request("/auth/profile", {
-                    method: "PUT",
-                    body: JSON.stringify({
-                        language: $("settings-language").value,
-                        theme: $("settings-theme").value,
-                        currency: $("settings-currency").value
-                    })
-                });
-                applyLanguage();
-                applyTheme($("settings-theme").value);
-                currentCurrency = $("settings-currency").value;
+                await request("/auth/profile", { method: "PUT", body: JSON.stringify(settings) });
+                if (!isCurrentSession(generation)) return;
+                currentCurrency = settings.currency;
                 updateSymbol(CURRENCY_SYMBOLS[currentCurrency] || "₸");
+                changeLanguage(languageFromServer(settings.language) || i18n.getLanguage());
+                applyTheme(settings.theme);
                 showNotification(i18n.t("addedSuccess")); // Reusing for success
             } catch (error) {
-                showNotification(i18n.translateApiError(error.detail, error.status), "error");
+                if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
             }
         };
     }
     if ($("change-password-btn")) {
         $("change-password-btn").onclick = async () => {
+            const generation = sessionGeneration;
             try {
                 await request("/auth/password", {
                     method: "PUT",
@@ -1267,32 +1482,35 @@ document.addEventListener("DOMContentLoaded", () => {
                         new_password: $("new-password").value
                     })
                 });
+                if (!isCurrentSession(generation)) return;
                 showNotification(i18n.t("passwordChangedSuccess"));
                 $("current-password").value = "";
                 $("new-password").value = "";
             } catch (error) {
-                showNotification(i18n.translateApiError(error.detail, error.status), "error");
+                if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
             }
         };
     }
     if ($("delete-account-btn")) {
         $("delete-account-btn").onclick = async () => {
             if (!confirm(i18n.t("deleteConfirmation"))) return;
+            const generation = sessionGeneration;
             try {
                 await request("/auth/delete", {
                     method: "DELETE",
                     body: JSON.stringify({ password: $("delete-password").value })
                 });
-                localStorage.removeItem(TOKEN_KEY);
+                // The account is gone either way; only sign out and reload if the
+                // page still belongs to it, not to someone who signed in meanwhile.
+                if (!isCurrentSession(generation)) return;
+                clearSession();
                 window.location.reload();
             } catch (error) {
-                showNotification(i18n.translateApiError(error.detail, error.status), "error");
+                if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
             }
         };
     }
 
-    // Call settings load on login/load
-    loadUserSettings();
     document.querySelectorAll(".mobile-nav-item").forEach(item => {
         item.onclick = () => {
             document.querySelectorAll(".mobile-nav-item").forEach(i => i.classList.remove("active"));

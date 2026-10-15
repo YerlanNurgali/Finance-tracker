@@ -82,3 +82,13 @@ def test_api_delete_and_update_not_found(monkeypatch):
     with pytest.raises(HTTPException) as update_error:
         api.modify_operation(99, payload, USER)
     assert update_error.value.status_code == 404
+
+
+@pytest.mark.parametrize("sent,stored", [("KZ", "KZ"), ("kz", "KZ"), ("KK", "KZ"), ("kk", "KZ"), ("en", "EN"), ("RU", "RU")])
+def test_profile_language_is_stored_with_one_code_for_kazakh(sent, stored):
+    assert api.ProfileSettingsPayload(language=sent).language == stored
+
+
+def test_profile_language_rejects_unknown_codes():
+    with pytest.raises(ValidationError):
+        api.ProfileSettingsPayload(language="XX")

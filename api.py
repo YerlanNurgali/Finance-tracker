@@ -130,7 +130,8 @@ class ProfileSettingsPayload(BaseModel):
     def valid_lang(cls, v):
         if v and v.upper() not in {"KZ", "EN", "RU", "KK"}:
             raise ValueError("Недопустимый язык")
-        return v.upper() if v else None
+        # KZ is the stored code for Kazakh; KK is still accepted from older clients.
+        return {"KK": "KZ"}.get(v.upper(), v.upper()) if v else None
 
     @validator("theme")
     def valid_theme(cls, v):
