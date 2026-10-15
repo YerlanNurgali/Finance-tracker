@@ -23,6 +23,11 @@ TABLE_NAME = "operations"
 VALID_OPERATION_TYPES = ("Доход", "Расход")
 
 
+class InvalidInput(ValueError):
+    """Data the user sent is not acceptable. The message is meant for the client;
+    any other ValueError (configuration, driver) is an internal error."""
+
+
 class OperationNotFound(LookupError):
     pass
 
@@ -220,14 +225,14 @@ def _validate_operation(operation_type, amount, category):
     try:
         amount = Decimal(str(amount).replace(" ", "").replace(" ", "").replace(",", "."))
     except Exception as exc:
-        raise ValueError("Сумма должна быть числом") from exc
+        raise InvalidInput("Сумма должна быть числом") from exc
     if amount <= 0:
-        raise ValueError("Сумма должна быть больше нуля")
+        raise InvalidInput("Сумма должна быть больше нуля")
     if operation_type not in VALID_OPERATION_TYPES:
-        raise ValueError("Недопустимый тип операции")
+        raise InvalidInput("Недопустимый тип операции")
     category = category.strip() if isinstance(category, str) else category
     if operation_type == "Расход" and not category:
-        raise ValueError("Для расхода нужна категория")
+        raise InvalidInput("Для расхода нужна категория")
     return amount, category
 
 
@@ -557,9 +562,9 @@ def add_budget(user_id: int, category: str, amount, period: str = 'month'):
     try:
         amount = Decimal(str(amount).replace(" ", "").replace(" ", "").replace(",", "."))
     except Exception as exc:
-        raise ValueError("Сумма бюджета должна быть числом") from exc
+        raise InvalidInput("Сумма бюджета должна быть числом") from exc
     if amount <= 0:
-        raise ValueError("Сумма бюджета должна быть больше нуля")
+        raise InvalidInput("Сумма бюджета должна быть больше нуля")
     category = category.strip()
 
     with _transaction() as connection:
@@ -574,9 +579,9 @@ def update_budget(budget_id: int, user_id: int, amount):
     try:
         amount = Decimal(str(amount).replace(" ", "").replace(" ", "").replace(",", "."))
     except Exception as exc:
-        raise ValueError("Сумма бюджета должна быть числом") from exc
+        raise InvalidInput("Сумма бюджета должна быть числом") from exc
     if amount <= 0:
-        raise ValueError("Сумма бюджета должна быть больше нуля")
+        raise InvalidInput("Сумма бюджета должна быть больше нуля")
 
     with _transaction() as connection:
         with connection.cursor() as cursor:
@@ -618,9 +623,9 @@ def add_goal(user_id: int, title: str, target_amount, current_amount=0, deadline
         target_amount = Decimal(str(target_amount).replace(" ", "").replace(" ", "").replace(",", "."))
         current_amount = Decimal(str(current_amount).replace(" ", "").replace(" ", "").replace(",", "."))
     except Exception as exc:
-        raise ValueError("Суммы цели должны быть числами") from exc
+        raise InvalidInput("Суммы цели должны быть числами") from exc
     if target_amount <= 0:
-        raise ValueError("Целевая сумма должна быть больше нуля")
+        raise InvalidInput("Целевая сумма должна быть больше нуля")
     title = title.strip()
 
     with _transaction() as connection:
@@ -635,9 +640,9 @@ def update_goal_progress(goal_id: int, user_id: int, current_amount):
     try:
         current_amount = Decimal(str(current_amount).replace(" ", "").replace(" ", "").replace(",", "."))
     except Exception as exc:
-        raise ValueError("Сумма должна быть числом") from exc
+        raise InvalidInput("Сумма должна быть числом") from exc
     if current_amount < 0:
-        raise ValueError("Накопленная сумма не может быть отрицательной")
+        raise InvalidInput("Накопленная сумма не может быть отрицательной")
 
     with _transaction() as connection:
         with connection.cursor() as cursor:

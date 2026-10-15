@@ -4,12 +4,15 @@ import csv
 import io
 import json
 import logging
+import math
 import os
 
 from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, validator
 from typing import Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -135,6 +138,23 @@ async def internal_server_error(request, exc):
                              headers=security_headers_for(request.url.path))
 
 
+def _json_safe(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+async def request_validation_error(request, exc):
+    """FastAPI's own 422 response, except that it echoes the submitted value:
+    Python's JSON parser accepts NaN and Infinity, which cannot be written back
+    as JSON, so those are echoed as strings instead of failing with a 500."""
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(_json_safe(exc.errors()))})
+
+
 app = FastAPI(
     title="Finance Tracker API v2",
     version="2.0.0",
@@ -145,6 +165,7 @@ app = FastAPI(
 )
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_exception_handler(Exception, internal_server_error)
+app.add_exception_handler(RequestValidationError, request_validation_error)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # The frontend files carry no version in their URLs, so browsers must
@@ -164,7 +185,19 @@ app.mount("/static", RevalidatedStaticFiles(directory=FRONTEND_DIR), name="stati
 
 
 # Pydantic models
-class RegisterPayload(BaseModel):
+class TextPayload(BaseModel):
+    """PostgreSQL text cannot hold NUL, so such a string is invalid input (422)
+    rather than a driver error (500). Passwords are only hashed, never stored."""
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def reject_nul(cls, value, info):
+        if isinstance(value, str) and "\x00" in value and "password" not in info.field_name:
+            raise ValueError("Текст содержит недопустимый символ")
+        return value
+
+
+class RegisterPayload(TextPayload):
     email: str = Field(..., min_length=5, max_length=120)
     password: str = Field(..., min_length=6, max_length=128)
 
@@ -176,15 +209,15 @@ class RegisterPayload(BaseModel):
         return v
 
 
-class LoginPayload(BaseModel):
+class LoginPayload(TextPayload):
     email: str
     password: str
 
 
-class OperationPayload(BaseModel):
+class OperationPayload(TextPayload):
     date: str = Field(..., min_length=1, max_length=64)
     operation_type: str
-    amount: float = Field(..., gt=0)
+    amount: float = Field(..., gt=0, allow_inf_nan=False)
     category: Optional[str] = Field(default=None, max_length=100)
 
     @validator("operation_type")
@@ -204,24 +237,24 @@ class OperationPayload(BaseModel):
         return value
 
 
-class BudgetPayload(BaseModel):
+class BudgetPayload(TextPayload):
     category: str = Field(..., min_length=1, max_length=100)
-    amount: float = Field(..., gt=0)
+    amount: float = Field(..., gt=0, allow_inf_nan=False)
     period: str = Field(default="month", max_length=32)
 
 
-class GoalPayload(BaseModel):
+class GoalPayload(TextPayload):
     title: str = Field(..., min_length=1, max_length=150)
-    target_amount: float = Field(..., gt=0)
-    current_amount: float = Field(default=0, ge=0)
+    target_amount: float = Field(..., gt=0, allow_inf_nan=False)
+    current_amount: float = Field(default=0, ge=0, allow_inf_nan=False)
     deadline: Optional[str] = Field(default=None, max_length=64)
 
 
 class GoalProgressPayload(BaseModel):
-    current_amount: float = Field(..., ge=0)
+    current_amount: float = Field(..., ge=0, allow_inf_nan=False)
 
 
-class ProfileSettingsPayload(BaseModel):
+class ProfileSettingsPayload(TextPayload):
     language: Optional[str] = Field(default=None, max_length=10)
     theme: Optional[str] = Field(default=None, max_length=10)
     currency: Optional[str] = Field(default=None, max_length=10)
@@ -310,8 +343,6 @@ def register_user(request: Request, payload: RegisterPayload):
         user_id = database.create_user(payload.email, pwd_hash)
     except database.UserAlreadyExists as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
 
     token = auth.create_access_token({"user_id": user_id, "email": payload.email, "tv": 0})
     return {"access_token": token, "token_type": "bearer", "email": payload.email}
@@ -338,15 +369,12 @@ def get_me(current_user: dict = Depends(get_current_user)):
 
 @app.put("/auth/profile")
 def update_profile(payload: ProfileSettingsPayload, current_user: dict = Depends(get_current_user)):
-    try:
-        database.update_user_settings(
-            current_user["id"],
-            language=payload.language,
-            theme=payload.theme,
-            currency=payload.currency
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    database.update_user_settings(
+        current_user["id"],
+        language=payload.language,
+        theme=payload.theme,
+        currency=payload.currency
+    )
     return {"message": "Профиль обновлен"}
 
 
@@ -456,24 +484,33 @@ def get_statistics(period: str = Query("all"), current_user: dict = Depends(get_
 def create_operation(operation: OperationPayload, current_user: dict = Depends(get_current_user)):
     try:
         database.add_operation(current_user["id"], operation.date, operation.operation_type, operation.amount, operation.category)
-
-        notification = None
-        if operation.operation_type == "Расход" and operation.category:
-            budgets = database.get_budgets(current_user["id"])
-            rows = _rows(current_user["id"], "month")
-            spent_map = {}
-            for row in rows:
-                if row[2] == "Расход" and row[4]:
-                    spent_map[row[4]] = spent_map.get(row[4], 0.0) + float(row[3])
-
-            for b in budgets:
-                if b[1] == operation.category and spent_map.get(b[1], 0.0) > float(b[2]):
-                    notification = f"⚠️ Бюджет на {b[1]} превышен!"
-                    break
-
-        return {"message": "Операция добавлена", "notification": notification}
-    except ValueError as exc:
+    except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    notification = None
+    if operation.operation_type == "Расход" and operation.category:
+        try:
+            notification = _budget_exceeded_notification(current_user["id"], operation.category)
+        except Exception as exc:
+            # The operation is already saved: an error here would invite a retry that
+            # stores it twice, so the warning is skipped. Only the type is logged.
+            logger.error("Budget check failed for user %s: %s", current_user["id"], type(exc).__name__)
+
+    return {"message": "Операция добавлена", "notification": notification}
+
+
+def _budget_exceeded_notification(user_id, category):
+    budgets = database.get_budgets(user_id)
+    rows = _rows(user_id, "month")
+    spent_map = {}
+    for row in rows:
+        if row[2] == "Расход" and row[4]:
+            spent_map[row[4]] = spent_map.get(row[4], 0.0) + float(row[3])
+
+    for b in budgets:
+        if b[1] == category and spent_map.get(b[1], 0.0) > float(b[2]):
+            return f"⚠️ Бюджет на {b[1]} превышен!"
+    return None
 
 
 @app.delete("/operations/{operation_id}")
@@ -493,7 +530,7 @@ def modify_operation(operation_id: int, operation: OperationPayload, current_use
         )
     except database.OperationNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
+    except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"message": "Операция обновлена"}
 
@@ -631,7 +668,7 @@ async def commit_csv_import(
     ]
     try:
         inserted = await run_in_threadpool(database.import_operations, current_user["id"], operations)
-    except ValueError as exc:
+    except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         # The exception text may quote statement values, so only its type is logged.
@@ -680,7 +717,7 @@ def list_budgets(current_user: dict = Depends(get_current_user)):
 def create_budget(payload: BudgetPayload, current_user: dict = Depends(get_current_user)):
     try:
         database.add_budget(current_user["id"], payload.category, payload.amount, payload.period)
-    except ValueError as exc:
+    except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"message": "Бюджет добавлен"}
 
@@ -691,7 +728,7 @@ def edit_budget(budget_id: int, payload: BudgetPayload, current_user: dict = Dep
         database.update_budget(budget_id, current_user["id"], payload.amount)
     except database.BudgetNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
+    except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"message": "Бюджет обновлен"}
 
@@ -730,7 +767,7 @@ def list_goals(current_user: dict = Depends(get_current_user)):
 def create_goal(payload: GoalPayload, current_user: dict = Depends(get_current_user)):
     try:
         database.add_goal(current_user["id"], payload.title, payload.target_amount, payload.current_amount, payload.deadline)
-    except ValueError as exc:
+    except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"message": "Цель добавлена"}
 
@@ -741,7 +778,7 @@ def update_goal(goal_id: int, payload: GoalProgressPayload, current_user: dict =
         database.update_goal_progress(goal_id, current_user["id"], payload.current_amount)
     except database.GoalNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except ValueError as exc:
+    except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"message": "Прогресс цели обновлен"}
 
