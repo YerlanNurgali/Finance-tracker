@@ -16,6 +16,7 @@ import pytest
 
 import api
 import database
+from db_safety import safe_subprocess_env
 
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
@@ -181,11 +182,9 @@ def _docs_statuses(env):
         " 'status': {p: x.status_code for p, x in r.items()},"
         " 'csp': all('content-security-policy' in x.headers for x in r.values())}))"
     )
-    base = {key: value for key, value in os.environ.items() if key not in ("RENDER", "API_DOCS")}
-    # Placeholders: load_dotenv() never overrides set variables, so .env is not read.
-    base.update({"DATABASE_URL": "postgresql://tests-not-used@127.0.0.1:1/none", "SECRET_KEY": "tests",
-                 "PYTHONDONTWRITEBYTECODE": "1"})
-    base.update(env)
+    # An allow-listed environment (no RENDER, API_DOCS, PG* or secrets unless given here),
+    # the dummy DATABASE_URL, .env switched off and a sitecustomize that refuses every connection.
+    base = safe_subprocess_env(dict(env, SECRET_KEY="tests"))
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, env=base, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout.strip().splitlines()[-1])

@@ -1,33 +1,31 @@
-"""Optional check against a real, throwaway PostgreSQL that every amount the API
+"""Optional check against the local PostgreSQL sandbox that every amount the API
 accepts fits the NUMERIC(14, 2) columns, and every other one is a 422.
 
-Skipped unless FT_TEST_POSTGRES_URL points at a disposable database. Never point
-it at Neon or any database with real data: the test drops the application tables.
+Skipped unless FT_TEST_POSTGRES_URL is set. The sandbox is one local, disposable
+database with a dedicated role and the schema ft_test, marked by tests/pg_sandbox.py
+(see tests/db_safety.py and the README). The test drops the application tables in
+that schema and nowhere else.
 """
-import os
-
 import pytest
 
 import api
 import database
+from db_safety import sandbox_configured, sandbox_sql
 
-URL = os.getenv("FT_TEST_POSTGRES_URL")
-pytestmark = pytest.mark.skipif(not URL, reason="FT_TEST_POSTGRES_URL is not set")
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(not sandbox_configured(), reason="FT_TEST_POSTGRES_URL is not set"),
+]
 psycopg2 = pytest.importorskip("psycopg2")
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", URL)
+def client(pg_database_url):
     database.close_pool()
-    connection = psycopg2.connect(URL)
-    try:
-        with connection, connection.cursor() as cursor:
-            cursor.execute("DROP TABLE IF EXISTS user_settings, goals, budgets, operations, users CASCADE")
-    finally:
-        connection.close()
+    sandbox_sql("DROP TABLE IF EXISTS ft_test.budget_alert_state, ft_test.user_settings, ft_test.goals, "
+                "ft_test.budgets, ft_test.operations, ft_test.user_categories, ft_test.users CASCADE")
     api.limiter.reset()
     with TestClient(api.app, raise_server_exceptions=False) as test_client:
         token = test_client.post("/auth/register", json={"email": "a@example.test", "password": "secret12"}).json()["access_token"]

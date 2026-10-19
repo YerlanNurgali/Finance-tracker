@@ -20,33 +20,45 @@ NOTE: Review and confirm the SQL steps before running against production.
 import os
 import sys
 
-try:
-    import psycopg2
-except ImportError:
-    print("ERROR: psycopg2-binary is not installed.")
-    sys.exit(1)
+# This file migrates the PRODUCTION database. pytest imports a file given to it by path, so
+# refuse before anything else runs if pytest has been loaded. Only guards against pytest; see
+# the README. Importing the module otherwise defines main() and does nothing else: loading
+# .env, reading DATABASE_URL, connecting and all SQL happen only inside main(), which runs
+# only when the file is executed directly.
+if "pytest" in sys.modules or "_pytest" in sys.modules:
+    raise RuntimeError("migrate_to_v2.py migrates the production database and must not be imported or collected by pytest")
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    print("ERROR: DATABASE_URL not set.")
-    sys.exit(1)
+def main():
+    try:
+        import psycopg2
+    except ImportError:
+        print("ERROR: psycopg2-binary is not installed.")
+        sys.exit(1)
 
-conn = psycopg2.connect(DATABASE_URL)
-conn.autocommit = False
-cur = conn.cursor()
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
 
-try:
-    print("=== Finance Tracker v2 — Safe Migration ===")
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    if not DATABASE_URL:
+        print("ERROR: DATABASE_URL not set.")
+        sys.exit(1)
 
-    # Step 1: Create users table
-    print("[1/7] Creating users table (IF NOT EXISTS)...")
-    cur.execute("""
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False
+    cur = conn.cursor()
+
+    # The SQL strings below keep their original indentation on purpose, so their text is
+    # exactly what it was before the code was moved into main().
+    try:
+        print("=== Finance Tracker v2 — Safe Migration ===")
+
+        # Step 1: Create users table
+        print("[1/7] Creating users table (IF NOT EXISTS)...")
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id BIGSERIAL PRIMARY KEY,
             email TEXT UNIQUE NOT NULL,
@@ -55,9 +67,9 @@ try:
         )
     """)
 
-    # Step 2: Create user_settings table
-    print("[2/7] Creating user_settings table (IF NOT EXISTS)...")
-    cur.execute("""
+        # Step 2: Create user_settings table
+        print("[2/7] Creating user_settings table (IF NOT EXISTS)...")
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS user_settings (
             user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             language TEXT DEFAULT 'RU',
@@ -66,9 +78,9 @@ try:
         )
     """)
 
-    # Step 3: Create budgets table
-    print("[3/7] Creating budgets table (IF NOT EXISTS)...")
-    cur.execute("""
+        # Step 3: Create budgets table
+        print("[3/7] Creating budgets table (IF NOT EXISTS)...")
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS budgets (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
@@ -79,9 +91,9 @@ try:
         )
     """)
 
-    # Step 4: Create goals table
-    print("[4/7] Creating goals table (IF NOT EXISTS)...")
-    cur.execute("""
+        # Step 4: Create goals table
+        print("[4/7] Creating goals table (IF NOT EXISTS)...")
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS goals (
             id BIGSERIAL PRIMARY KEY,
             user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
@@ -93,9 +105,9 @@ try:
         )
     """)
 
-    # Step 5: Add user_id column to operations IF NOT EXISTS (NULLABLE for now)
-    print("[5/7] Adding user_id column to operations (if missing)...")
-    cur.execute("""
+        # Step 5: Add user_id column to operations IF NOT EXISTS (NULLABLE for now)
+        print("[5/7] Adding user_id column to operations (if missing)...")
+        cur.execute("""
         DO $$
         BEGIN
             IF NOT EXISTS (
@@ -110,49 +122,53 @@ try:
         END $$;
     """)
 
-    # Step 6: Create or fetch a legacy system user for pre-v2 operations
-    print("[6/7] Ensuring legacy system user exists for pre-v2 data...")
-    LEGACY_EMAIL = "legacy@finance-tracker.internal"
-    LEGACY_HASH = "LEGACY_NO_LOGIN"  # Not a valid hash — cannot log in with this account
+        # Step 6: Create or fetch a legacy system user for pre-v2 operations
+        print("[6/7] Ensuring legacy system user exists for pre-v2 data...")
+        LEGACY_EMAIL = "legacy@finance-tracker.internal"
+        LEGACY_HASH = "LEGACY_NO_LOGIN"  # Not a valid hash — cannot log in with this account
 
-    cur.execute("SELECT id FROM users WHERE email = %s", (LEGACY_EMAIL,))
-    row = cur.fetchone()
-    if row:
-        legacy_user_id = row[0]
-        print(f"    Legacy user already exists: id={legacy_user_id}")
-    else:
-        cur.execute(
-            "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id",
-            (LEGACY_EMAIL, LEGACY_HASH)
-        )
-        legacy_user_id = cur.fetchone()[0]
-        # Create settings for legacy user
-        cur.execute("INSERT INTO user_settings (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (legacy_user_id,))
-        print(f"    Legacy user created: id={legacy_user_id}")
+        cur.execute("SELECT id FROM users WHERE email = %s", (LEGACY_EMAIL,))
+        row = cur.fetchone()
+        if row:
+            legacy_user_id = row[0]
+            print(f"    Legacy user already exists: id={legacy_user_id}")
+        else:
+            cur.execute(
+                "INSERT INTO users (email, password_hash) VALUES (%s, %s) RETURNING id",
+                (LEGACY_EMAIL, LEGACY_HASH)
+            )
+            legacy_user_id = cur.fetchone()[0]
+            # Create settings for legacy user
+            cur.execute("INSERT INTO user_settings (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (legacy_user_id,))
+            print(f"    Legacy user created: id={legacy_user_id}")
 
-    # Step 7: Assign legacy operations (user_id IS NULL) to the legacy user
-    print("[7/7] Assigning legacy operations (user_id IS NULL) to legacy user...")
-    cur.execute("UPDATE operations SET user_id = %s WHERE user_id IS NULL", (legacy_user_id,))
-    updated = cur.rowcount
-    print(f"    {updated} legacy operation(s) assigned to user_id={legacy_user_id}")
+        # Step 7: Assign legacy operations (user_id IS NULL) to the legacy user
+        print("[7/7] Assigning legacy operations (user_id IS NULL) to legacy user...")
+        cur.execute("UPDATE operations SET user_id = %s WHERE user_id IS NULL", (legacy_user_id,))
+        updated = cur.rowcount
+        print(f"    {updated} legacy operation(s) assigned to user_id={legacy_user_id}")
 
-    # Commit all
-    conn.commit()
-    print()
-    print("=== Migration completed successfully ===")
-    print()
-    print("IMPORTANT NOTES:")
-    print(f"  - Legacy operations have been assigned to user '{LEGACY_EMAIL}' (id={legacy_user_id})")
-    print("  - This legacy account CANNOT log in (no valid password hash)")
-    print("  - No data was deleted or modified destructively")
-    print("  - New users can register normally and see only their own data")
+        # Commit all
+        conn.commit()
+        print()
+        print("=== Migration completed successfully ===")
+        print()
+        print("IMPORTANT NOTES:")
+        print(f"  - Legacy operations have been assigned to user '{LEGACY_EMAIL}' (id={legacy_user_id})")
+        print("  - This legacy account CANNOT log in (no valid password hash)")
+        print("  - No data was deleted or modified destructively")
+        print("  - New users can register normally and see only their own data")
 
-except Exception as e:
-    conn.rollback()
-    print(f"ERROR: Migration failed — {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(1)
-finally:
-    cur.close()
-    conn.close()
+    except Exception as e:
+        conn.rollback()
+        print(f"ERROR: Migration failed — {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        cur.close()
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()

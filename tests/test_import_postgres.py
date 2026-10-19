@@ -1,19 +1,23 @@
-"""Optional checks against a real, throwaway PostgreSQL.
+"""Optional checks against the local PostgreSQL sandbox.
 
-Skipped unless FT_TEST_POSTGRES_URL points at a disposable database, e.g. a
-local cluster. Never point it at Neon or any database with real data: the
-tests drop and recreate the application tables.
+Skipped unless FT_TEST_POSTGRES_URL is set. The sandbox is one local, disposable
+database with a dedicated role and the schema ft_test, marked by tests/pg_sandbox.py
+(see tests/db_safety.py and the README). Nothing else is ever connected: every
+statement below runs in the ft_test schema, and the tests drop and recreate the
+application tables there.
 """
-import os
 import threading
 
 import pytest
 
 import bank_import
 import database
+from db_safety import sandbox_configured, sandbox_sql as _sql
 
-URL = os.getenv("FT_TEST_POSTGRES_URL")
-pytestmark = pytest.mark.skipif(not URL, reason="FT_TEST_POSTGRES_URL is not set")
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(not sandbox_configured(), reason="FT_TEST_POSTGRES_URL is not set"),
+]
 psycopg2 = pytest.importorskip("psycopg2")
 
 LEGACY_SCHEMA = """
@@ -25,22 +29,11 @@ LEGACY_SCHEMA = """
 """
 
 
-def _sql(statement, params=()):
-    connection = psycopg2.connect(URL)
-    try:
-        with connection, connection.cursor() as cursor:
-            cursor.execute(statement, params)
-            return cursor.fetchall() if cursor.description else None
-    finally:
-        connection.close()
-
-
 @pytest.fixture
-def pg(monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", URL)
-    monkeypatch.setattr(database, "get_connection", database.__dict__["get_connection"])
+def pg(pg_database_url):
     database.close_pool()
-    _sql("DROP TABLE IF EXISTS user_settings, goals, budgets, operations, users CASCADE")
+    _sql("DROP TABLE IF EXISTS ft_test.budget_alert_state, ft_test.user_settings, ft_test.goals, "
+         "ft_test.budgets, ft_test.operations, ft_test.user_categories, ft_test.users CASCADE")
     _sql(LEGACY_SCHEMA)  # a database created before CSV import existed
     _sql("INSERT INTO users (email, password_hash) VALUES ('a@example.com', 'x'), ('b@example.com', 'x')")
     _sql("INSERT INTO operations (user_id, date, operation_type, amount, category) "

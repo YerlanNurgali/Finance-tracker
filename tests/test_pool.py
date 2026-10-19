@@ -6,6 +6,7 @@ import threading
 import pytest
 
 import database
+from db_safety import safe_subprocess_env
 
 psycopg2 = pytest.importorskip("psycopg2")
 from psycopg2 import extensions  # noqa: E402
@@ -319,7 +320,7 @@ def test_valid_pool_settings_and_defaults(monkeypatch):
 
 
 def test_invalid_setting_fails_on_import_with_clear_message():
-    env = dict(os.environ, DB_POOL_MAX="0")
+    env = safe_subprocess_env({"DB_POOL_MAX": "0"})  # no PG* variables, dummy DATABASE_URL, connections refused
     result = subprocess.run(
         [sys.executable, "-c", "import database"],
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
