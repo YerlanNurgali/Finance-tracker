@@ -11,9 +11,14 @@ const CURRENCY_SYMBOLS = { KZT: "₸", USD: "$", EUR: "€", RUB: "₽" };
 let currentCurrency = "KZT";
 
 let editingOperationId = null;
+// While an operation is edited: its stored date text and what the date field showed for it.
+// If the field is left alone, the stored text is sent back untouched.
+let editingOperationDate = null;
 let editingBudgetId = null;
 let currentPeriod = "all";
 let currentDashboard = null;
+// The signed-in user's own categories ({ id, kind, name }); the built-in ones are the constants above.
+let userCategories = [];
 let notificationTimer = null;
 
 const i18n = window.FinanceTrackerI18n;
@@ -113,6 +118,9 @@ function applyLanguage() {
     updateCategoryOptions($("operation-category")?.value);
     updateTypeFilterOptions();
     updateCategoryFilterOptions();
+    renderMyCategories();
+    renderUserBadge();
+    updateAuthSubmitLabel();
     applyTheme(document.documentElement.dataset.theme || getStoredTheme());
     if (currentDashboard) renderDashboard(currentDashboard);
     refreshImportLanguage();
@@ -122,7 +130,7 @@ function updateCategoryOptions(selectedValue = "") {
     const select = $("operation-category");
     const type = getFormType();
     if (!select) return;
-    const categories = type === "Доход" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+    const categories = categoryNames(type);
     const values = categories.includes(selectedValue) || !selectedValue ? categories : [selectedValue, ...categories];
     select.replaceChildren(...values.map((value) => new Option(i18n.translateCategory(value), value)));
     select.value = selectedValue && values.includes(selectedValue) ? selectedValue : categories[0];
@@ -155,7 +163,7 @@ function updateCategoryFilterOptions() {
     const select = $("operation-category-filter");
     if (!select) return;
     const selected = select.value;
-    const categories = [...new Set([...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES])];
+    const categories = [...new Set([...INCOME_CATEGORIES, ...EXPENSE_CATEGORIES, ...userCategories.map((category) => category.name)])];
     select.replaceChildren(
         new Option(i18n.t("allCategories"), ""),
         ...categories.map((value) => new Option(i18n.translateCategory(value), value))
@@ -166,6 +174,11 @@ function updateCategoryFilterOptions() {
 const TOKEN_KEY = "finance_tracker_token";
 const USER_EMAIL_KEY = "finance_tracker_email";
 let authMode = "login";
+
+// The sign-in dialog's submit button reads "Sign in" or "Create account" by mode, in the current language.
+function updateAuthSubmitLabel() {
+    if ($("auth-submit-btn")) $("auth-submit-btn").textContent = i18n.t(authMode === "login" ? "signIn" : "createAccount");
+}
 
 function showAuthModal() {
     $("auth-modal").hidden = false;
@@ -192,7 +205,7 @@ function renderUserBadge() {
         const logoutButton = document.createElement("button");
         logoutButton.type = "button";
         logoutButton.id = "logout-btn";
-        logoutButton.textContent = "Выйти";
+        logoutButton.textContent = i18n.t("signOut");
         badge.append(label, logoutButton);
         area.appendChild(badge);
         logoutButton.onclick = () => {
@@ -205,7 +218,7 @@ function renderUserBadge() {
         const loginBtn = document.createElement("button");
         loginBtn.className = "secondary-button";
         loginBtn.style.padding = "6px 14px";
-        loginBtn.textContent = "Войти / Регистрация";
+        loginBtn.textContent = i18n.t("signInOrRegister");
         loginBtn.onclick = () => showAuthModal();
         area.appendChild(loginBtn);
     }
@@ -230,10 +243,12 @@ function clearSession() {
     localStorage.removeItem(USER_EMAIL_KEY);
     clearLocalData();
     currentDashboard = null;
+    userCategories = [];
     currentCurrency = DEFAULT_SETTINGS.currency;
     updateSymbol(CURRENCY_SYMBOLS[currentCurrency]);
     setSettingsReady(false);
     clearDashboardView();
+    refreshCategoryControls();  // the previous user's categories leave every list
 }
 
 // Removes the previous user's figures from the page, which stays visible
@@ -241,7 +256,8 @@ function clearSession() {
 function clearDashboardView() {
     ["operations-list", "period-summary-content", "categories-list", "calendar-grid",
         "budgets-list", "goals-list", "settings-email", "import-sample", "import-preview-table",
-        "import-errors", "import-report-errors", "import-summary", "import-report", "import-preview-more"
+        "import-errors", "import-report-errors", "import-summary", "import-report", "import-preview-more",
+        "my-categories-list"
     ].forEach((id) => $(id)?.replaceChildren());
     ["balance", "summary-balance", "total-income", "total-expense"].forEach((id) => {
         if ($(id)) $(id).textContent = formatMoney(0);
@@ -256,7 +272,8 @@ function clearDashboardView() {
     // in the sign-in form.
     ["operation-search", "operation-type-filter", "operation-category-filter", "operation-amount",
         "current-password", "new-password", "delete-password", "budget-amount", "goal-title",
-        "goal-target", "goal-deadline", "auth-email", "auth-password", "import-income-values", "import-expense-values"
+        "goal-target", "goal-deadline", "auth-email", "auth-password", "import-income-values", "import-expense-values",
+        "new-category-name"
     ].forEach((id) => {
         if ($(id)) $(id).value = "";
     });
@@ -265,7 +282,9 @@ function clearDashboardView() {
     for (const [field, value] of Object.entries(DEFAULT_SETTINGS)) {
         if ($(`settings-${field}`)) $(`settings-${field}`).value = value;
     }
+    if ($("settings-alerts-inapp")) $("settings-alerts-inapp").checked = true;
     editingOperationId = null;
+    editingOperationDate = null;
     ["operation-form", "budget-form", "goal-form"].forEach((id) => $(id)?.classList.add("hidden"));
     // Column choices are built from the previous file's CSV headers.
     Object.values(IMPORT_COLUMN_FIELDS).forEach((id) => $(id)?.replaceChildren());
@@ -365,6 +384,28 @@ async function downloadExport(format) {
 
 function isCurrentSession(generation) {
     return generation === sessionGeneration;
+}
+
+const ALERT_KEYS = { warning: "budgetAlertWarning", limit: "budgetAlertLimit", exceeded: "budgetAlertExceeded" };
+
+// The toast for the budget alerts a save returned, in the interface language, as
+// { text, type } or null. When the server sends `alerts` it has already applied the
+// account's switch, so an empty list means nothing to show; only a server that
+// predates `alerts` is asked for its single Russian `notification` sentence.
+function budgetAlertNotice(response) {
+    if (!response) return null;
+    if (Array.isArray(response.alerts)) {
+        const alerts = response.alerts.filter((alert) => ALERT_KEYS[alert.level]);
+        if (alerts.length === 0) return null;
+        const text = alerts.map((alert) => i18n.t(ALERT_KEYS[alert.level], {
+            category: i18n.translateCategory(alert.category),
+            percent: alert.percent,
+            spent: formatMoney(alert.spent),
+            amount: formatMoney(alert.amount)
+        })).join(" • ");
+        return { text, type: alerts.some((alert) => alert.level === "exceeded") ? "error" : "warning" };
+    }
+    return response.notification ? { text: response.notification, type: "warning" } : null;
 }
 
 function showNotification(message, type = "success") {
@@ -633,7 +674,10 @@ function renderCalendar(operations) {
     const daysInMonth = lastDay.getDate();
     const startDayOfWeek = (firstDay.getDay() + 6) % 7; // Monday = 0
 
-    const daysOfWeek = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    // 1 January 2024 was a Monday: seven days from it give the weekday names, Monday first,
+    // in the interface language.
+    const weekdayFormat = new Intl.DateTimeFormat(LOCALES[i18n.getLanguage()], { weekday: "short" });
+    const daysOfWeek = Array.from({ length: 7 }, (_, index) => weekdayFormat.format(new Date(2024, 0, 1 + index)));
     daysOfWeek.forEach(d => {
         const header = document.createElement("div");
         header.className = "calendar-day-header";
@@ -734,7 +778,7 @@ function renderBudgets(budgets) {
         const header = createBlock("budget-header",
             createText("span", i18n.translateCategory(budget.category)),
             createIconButton(i18n.t("deleteBudget"), () => deleteBudget(budget.id)));
-        const fill = createBlock(`budget-progress-fill ${budget.exceeded ? 'exceeded' : ''}`);
+        const fill = createBlock(`budget-progress-fill ${budget.exceeded ? 'exceeded' : (budget.level >= 1 ? 'warning' : '')}`);
         fill.style.width = `${Math.min(100, Number(budget.percent) || 0)}%`;
         const footer = createBlock("budget-footer",
             createText("span", i18n.t("spentOf", { spent: formatMoney(budget.spent), amount: formatMoney(budget.amount) })),
@@ -759,7 +803,103 @@ async function deleteBudget(id) {
 function updateBudgetCategoryOptions() {
     const select = $("budget-category");
     if (!select) return;
-    select.replaceChildren(...EXPENSE_CATEGORIES.map((value) => new Option(i18n.translateCategory(value), value)));
+    select.replaceChildren(...categoryNames("Расход").map((value) => new Option(i18n.translateCategory(value), value)));
+}
+
+// --- The user's own categories ---
+// Built-in names first, then the user's own of that kind (type is "Доход" or "Расход").
+function categoryNames(type) {
+    const builtIn = type === "Доход" ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+    const own = userCategories.filter((category) => category.kind === type).map((category) => category.name);
+    return [...new Set([...builtIn, ...own])];
+}
+
+// Every control that lists categories follows the current list (and the interface language).
+function refreshCategoryControls() {
+    updateCategoryOptions($("operation-category")?.value);
+    updateCategoryFilterOptions();
+    updateBudgetCategoryOptions();
+    renderMyCategories();
+}
+
+// A failure keeps the list as it is: the built-in categories always work.
+async function loadCategories() {
+    const generation = sessionGeneration;
+    try {
+        const data = await request("/categories");
+        if (!isCurrentSession(generation)) return;
+        userCategories = (Array.isArray(data.categories) ? data.categories : []).filter((category) => !category.builtin);
+        refreshCategoryControls();
+    } catch (_) {
+        // Older server or a temporary error: nothing to show about it.
+    }
+}
+
+function renderMyCategories() {
+    const container = $("my-categories-list");
+    if (!container) return;
+    container.replaceChildren();
+    if (!userCategories.length) {
+        container.append(createState(i18n.t("noCustomCategories"), "empty-state"));
+        return;
+    }
+    userCategories.forEach((category) => {
+        const item = document.createElement("div");
+        item.className = "my-category-item";
+        const label = document.createElement("span");
+        label.className = "my-category-name";
+        label.textContent = category.name;
+        const kind = document.createElement("span");
+        kind.className = "my-category-kind";
+        kind.textContent = i18n.translateOperationType(category.kind);
+        label.append(kind);
+        const actions = document.createElement("div");
+        actions.className = "operation-actions";
+        const rename = document.createElement("button");
+        rename.type = "button";
+        rename.className = "icon-button edit-operation-btn";
+        rename.textContent = "✏️";
+        rename.setAttribute("aria-label", i18n.t("renameCategory"));
+        rename.onclick = () => renameCategory(category);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "icon-button delete-operation-btn";
+        remove.textContent = "🗑️";
+        remove.setAttribute("aria-label", i18n.t("deleteCategory"));
+        remove.onclick = () => deleteCategory(category);
+        actions.append(rename, remove);
+        item.append(label, actions);
+        container.appendChild(item);
+    });
+}
+
+async function renameCategory(category) {
+    const answer = prompt(i18n.t("renameCategoryPrompt"), category.name);
+    const name = answer === null ? "" : answer.trim();
+    if (!name || name === category.name) return;
+    const generation = sessionGeneration;
+    try {
+        await request(`/categories/${category.id}`, { method: "PUT", body: JSON.stringify({ name }) });
+        if (!isCurrentSession(generation)) return;
+        await loadDashboard();  // operations and budgets carry the new name; this reloads the categories too
+        showNotification(i18n.t("categoryRenamed"));
+    } catch (error) {
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
+    }
+}
+
+// The operations of a deleted category move to "Другое"; the server refuses while a budget uses it.
+async function deleteCategory(category) {
+    if (!confirm(i18n.t("deleteCategoryConfirm", { name: category.name, target: i18n.translateCategory("Другое") }))) return;
+    const generation = sessionGeneration;
+    try {
+        await request(`/categories/${category.id}`, { method: "DELETE" });
+        if (!isCurrentSession(generation)) return;
+        await loadDashboard();
+        showNotification(i18n.t("categoryDeleted"));
+    } catch (error) {
+        if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
+    }
 }
 
 async function loadGoals() {
@@ -838,7 +978,7 @@ async function loadDashboard() {
     $("operations-list").replaceChildren(createState(i18n.t("loadingOperations"), "loading-state"));
     // Budgets and goals load on their own and show their own errors: a failure
     // there must not hide fresh operations and balance behind an old snapshot.
-    const secondary = Promise.all([loadBudgets(), loadGoals()]);
+    const secondary = Promise.all([loadBudgets(), loadGoals(), loadCategories()]);
     const generation = sessionGeneration;
     let data;
     try {
@@ -879,11 +1019,93 @@ async function loadDashboard() {
     await secondary;
 }
 
+// --- Date and time of an operation ---
+// Operation dates are stored as text. The frontend and the CSV import write
+// "DD.MM.YYYY, HH:MM:SS"; older rows may hold other forms (see budget_alerts.DATE_FORMATS
+// on the server). The <input type="datetime-local"> works with "YYYY-MM-DDTHH:MM".
+const STORED_DATE_PATTERN = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:,?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/;
+const INPUT_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+// The stored forms the server accepts as they are (api.OPERATION_DATE_FORMATS).
+const SERVER_DATE_PATTERN = /^(\d{1,2}\.\d{1,2}\.\d{4}(, \d{1,2}:\d{2}(:\d{2})?| \d{1,2}:\d{2})?|\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?)$/;
+
+function pad2(number) {
+    return String(number).padStart(2, "0");
+}
+
+// The parts of a real calendar date and time of day, or null (31.02, hour 24, ...).
+function dateParts(year, month, day, hour = 0, minute = 0, second = 0) {
+    const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    const valid = date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+        && date.getUTCHours() === hour && date.getUTCMinutes() === minute && date.getUTCSeconds() === second;
+    return valid ? { year, month, day, hour, minute, second } : null;
+}
+
+function parseOperationDate(text) {
+    const value = String(text ?? "").trim();
+    let match = value.match(STORED_DATE_PATTERN);
+    if (match) {
+        const [, day, month, year, hour, minute, second] = match;
+        return dateParts(Number(year), Number(month), Number(day), Number(hour ?? 0), Number(minute ?? 0), Number(second ?? 0));
+    }
+    match = value.match(ISO_DATE_PATTERN);
+    if (match) {
+        const [, year, month, day, hour, minute] = match;
+        return dateParts(Number(year), Number(month), Number(day), Number(hour ?? 0), Number(minute ?? 0));
+    }
+    return null;
+}
+
+function toDateTimeInput(parts) {
+    return `${String(parts.year).padStart(4, "0")}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hour)}:${pad2(parts.minute)}`;
+}
+
+// The value for the date field of a stored date, or "" when it cannot be read.
+function operationDateToInput(text) {
+    const parts = parseOperationDate(text);
+    return parts ? toDateTimeInput(parts) : "";
+}
+
+// The text to send for a date field value, or null when it is empty or not a real date.
+function inputToServerDate(value) {
+    const match = String(value ?? "").trim().match(INPUT_DATE_PATTERN);
+    if (!match) return null;
+    const [, year, month, day, hour, minute, second] = match;
+    const parts = dateParts(Number(year), Number(month), Number(day), Number(hour), Number(minute), Number(second ?? 0));
+    if (!parts) return null;
+    return `${pad2(parts.day)}.${pad2(parts.month)}.${String(parts.year).padStart(4, "0")}, ${pad2(parts.hour)}:${pad2(parts.minute)}:${pad2(parts.second)}`;
+}
+
+function currentDateTimeInput() {
+    const now = new Date();
+    return toDateTimeInput({
+        year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate(),
+        hour: now.getHours(), minute: now.getMinutes()
+    });
+}
+
+function setOperationDate(value) {
+    if ($("operation-date")) $("operation-date").value = value;
+}
+
+// The date to send when an operation is saved: what the field holds, or the stored text
+// itself if this is an edit and the field was not changed. null means the field has no
+// usable date. An empty or invalid field is never replaced by the current time.
+function operationDateToSend() {
+    const field = $("operation-date");
+    if (!field) return inputToServerDate(currentDateTimeInput());  // a page cached before the field existed
+    const unchanged = editingOperationDate && field.value !== "" && field.value === editingOperationDate.field
+        && SERVER_DATE_PATTERN.test(String(editingOperationDate.original).trim());
+    return unchanged ? String(editingOperationDate.original).trim() : inputToServerDate(field.value);
+}
+
 function resetForm() {
     editingOperationId = null;
+    editingOperationDate = null;
     $("operation-form-title").textContent = i18n.t("newOperation");
     $("save-operation-btn").textContent = i18n.t("save");
     $("operation-amount").value = "";
+    setOperationDate(currentDateTimeInput());
     setFormType("Доход");
     $("operation-form").classList.add("hidden");
 }
@@ -900,7 +1122,11 @@ function editOperation(operation) {
     setFormType(operation.type);
     updateCategoryOptions(operation.category || "");
     $("operation-amount").value = operation.amount;
+    const field = operationDateToInput(operation.date);
+    editingOperationDate = { original: operation.date, field };
+    setOperationDate(field);
     openForm();
+    if (!field) showNotification(i18n.t("operationDateUnreadable"), "warning");
 }
 
 async function deleteOperation(id) {
@@ -979,6 +1205,8 @@ async function loadUserSettings() {
             if ($("settings-language")) $("settings-language").value = languageForServer(language);
             if ($("settings-theme")) $("settings-theme").value = user.settings.theme || "light";
             if ($("settings-currency")) $("settings-currency").value = user.settings.currency || "KZT";
+            // On unless the account says otherwise.
+            if ($("settings-alerts-inapp")) $("settings-alerts-inapp").checked = user.settings.budget_alerts_inapp !== false;
 
             // Sync local state with DB settings. Currency goes first: changing the
             // language re-renders the dashboard, which must use this user's currency.
@@ -1053,8 +1281,8 @@ function fillCategorySelect(select, categories, selected) {
 }
 
 function fillImportCategorySelects() {
-    fillCategorySelect($("import-default-income"), INCOME_CATEGORIES, $("import-default-income").value);
-    fillCategorySelect($("import-default-expense"), EXPENSE_CATEGORIES, $("import-default-expense").value);
+    fillCategorySelect($("import-default-income"), categoryNames("Доход"), $("import-default-income").value);
+    fillCategorySelect($("import-default-expense"), categoryNames("Расход"), $("import-default-expense").value);
 }
 
 function fillImportColumnSelects(suggested = null) {
@@ -1293,6 +1521,8 @@ async function confirmImport() {
         return;
     }
     await loadDashboard();
+    const alertNotice = generation === sessionGeneration ? budgetAlertNotice(importState.report) : null;
+    if (alertNotice) showNotification(alertNotice.text, alertNotice.type);
 }
 
 function openImportModal() {
@@ -1334,6 +1564,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     i18n.setLanguage(getStoredLanguage());
     applyTheme(getStoredTheme());
+    setOperationDate(currentDateTimeInput());
     document.querySelectorAll(".language-button").forEach((button) => {
         button.onclick = () => selectLanguage(button.dataset.language);
     });
@@ -1372,6 +1603,22 @@ document.addEventListener("DOMContentLoaded", () => {
             if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
     });
+
+    if ($("add-category-btn")) {
+        $("add-category-btn").onclick = oncePerClick($("add-category-btn"), async () => {
+            const generation = sessionGeneration;
+            const payload = { kind: $("new-category-kind").value, name: $("new-category-name").value.trim() };
+            try {
+                await request("/categories", { method: "POST", body: JSON.stringify(payload) });
+                if (!isCurrentSession(generation)) return;
+                $("new-category-name").value = "";
+                await loadCategories();
+                showNotification(i18n.t("categoryAdded"));
+            } catch (error) {
+                if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
+            }
+        });
+    }
 
     $("add-goal-btn").onclick = () => {
         $("goal-form").classList.remove("hidden");
@@ -1414,8 +1661,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     $("save-operation-btn").onclick = oncePerClick($("save-operation-btn"), async () => {
         const wasEditing = editingOperationId !== null;
+        const date = operationDateToSend();
+        if (!date) {
+            showNotification(i18n.t("operationDateInvalid"), "error");
+            return;
+        }
         const payload = {
-            date: new Date().toLocaleString("ru-RU", { hour12: false }),
+            date,
             operation_type: getFormType(),
             amount: Number($("operation-amount").value),
             category: $("operation-category").value || null
@@ -1431,7 +1683,9 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!isCurrentSession(generation)) return;
             resetForm();
             await loadDashboard();
-            showNotification(res.notification || i18n.t(wasEditing ? "updatedSuccess" : "addedSuccess"));
+            const alertNotice = budgetAlertNotice(res);
+            if (alertNotice) showNotification(alertNotice.text, alertNotice.type);
+            else showNotification(i18n.t(wasEditing ? "updatedSuccess" : "addedSuccess"));
         } catch (error) {
             if (isCurrentSession(generation)) showNotification(i18n.translateApiError(error.detail, error.status), "error");
         }
@@ -1460,7 +1714,7 @@ document.addEventListener("DOMContentLoaded", () => {
             document.querySelectorAll(".auth-tab").forEach((t) => t.classList.remove("active"));
             tab.classList.add("active");
             authMode = tab.dataset.authMode;
-            $("auth-submit-btn").textContent = authMode === "login" ? "Войти" : "Создать аккаунт";
+            updateAuthSubmitLabel();
         };
     });
 
@@ -1478,13 +1732,12 @@ document.addEventListener("DOMContentLoaded", () => {
             localStorage.setItem(USER_EMAIL_KEY, data.email || email);
             hideAuthModal();
             renderUserBadge();
-            showNotification(authMode === "login" ? "Успешный вход!" : "Аккаунт успешно создан!");
+            showNotification(i18n.t(authMode === "login" ? "loginSuccess" : "accountCreated"));
             startSession();
         } catch (error) {
-            // FastAPI lists invalid fields (e.g. a short password) as objects, not text.
-            $("auth-error").textContent = typeof error.detail === "string" && error.detail
-                ? error.detail
-                : i18n.translateApiError("", error.status);
+            // Only known server messages are translated and shown; FastAPI lists invalid fields
+            // (e.g. a short password) as objects, which get the generic text for the status.
+            $("auth-error").textContent = i18n.translateApiError(typeof error.detail === "string" ? error.detail : "", error.status);
         }
     };
 
@@ -1508,6 +1761,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 theme: $("settings-theme").value,
                 currency: $("settings-currency").value
             };
+            if ($("settings-alerts-inapp")) settings.budget_alerts_inapp = Boolean($("settings-alerts-inapp").checked);
             try {
                 await request("/auth/profile", { method: "PUT", body: JSON.stringify(settings) });
                 if (!isCurrentSession(generation)) return;

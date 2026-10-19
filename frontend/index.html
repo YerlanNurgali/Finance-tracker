@@ -71,7 +71,7 @@
                     <div id="operation-form" class="operation-form hidden" aria-labelledby="operation-form-title">
                         <div class="form-heading"><div><p class="eyebrow" data-i18n="quickAdd">Быстрое добавление</p><h3 id="operation-form-title" data-i18n="newOperation">Новая операция</h3></div><button id="cancel-operation-btn" class="icon-button" type="button" data-i18n-aria-label="cancel" aria-label="">×</button></div>
                         <div class="operation-toggle" role="group" data-i18n-aria-label="operationType"><button type="button" class="type-tab active" data-operation-type="Доход" data-i18n="addIncome">Доход</button><button type="button" class="type-tab" data-operation-type="Расход" data-i18n="addExpense">Расход</button></div>
-                        <div class="form-grid"><div class="form-field"><label for="operation-amount" data-i18n="amount">Сумма</label><input type="number" id="operation-amount" data-i18n-placeholder="enterAmount" placeholder="Введите сумму" min="1" step="0.01" inputmode="decimal"></div><div class="form-field"><label for="operation-category" data-i18n="category">Категория</label><select id="operation-category"></select></div></div>
+                        <div class="form-grid"><div class="form-field"><label for="operation-amount" data-i18n="amount">Сумма</label><input type="number" id="operation-amount" data-i18n-placeholder="enterAmount" placeholder="Введите сумму" min="1" step="0.01" inputmode="decimal"></div><div class="form-field"><label for="operation-category" data-i18n="category">Категория</label><select id="operation-category"></select></div><div class="form-field form-field-wide"><label for="operation-date" data-i18n="operationDate">Дата и время</label><input type="datetime-local" id="operation-date" min="2000-01-01T00:00"></div></div>
                         <div class="form-buttons"><button id="save-operation-btn" class="primary-button" type="button" data-i18n="save">Сохранить</button><button id="cancel-operation-secondary-btn" class="secondary-button" type="button" data-i18n="cancel">Отмена</button></div>
                     </div>
                     <div id="operations-list" class="operations-list"><p class="loading-state" data-i18n="loadingOperations">Загрузка операций...</p></div>
@@ -81,14 +81,14 @@
                 <section class="panel budgets-section">
                     <div class="section-header section-header-wrap"><div><p class="eyebrow" data-i18n="budgetsTitle">Бюджеты</p><h2 data-i18n="monthlyBudgets">Месячные бюджеты</h2></div><button id="add-budget-btn" class="secondary-button" type="button"><span aria-hidden="true">+</span> <span data-i18n="addBudget">Добавить</span></button></div>
                     <div id="budgets-list" class="budgets-list"><p class="loading-state" data-i18n="loadingBudgets">Загрузка бюджетов...</p></div>
-                    <div id="budget-form" class="operation-form hidden" aria-labelledby="budget-form-title"><div class="form-heading"><div><h3 id="budget-form-title" data-i18n="newBudget">Новый бюджет</h3></div><button id="cancel-budget-btn" class="icon-button" type="button">×</button></div><div class="form-grid"><div class="form-field"><label for="budget-category" data-i18n="category">Категория</label><select id="budget-category"></select></div><div class="form-field"><label for="budget-amount" data-i18n="amount">Лимит</label><input type="number" id="budget-amount" min="1" step="0.01" placeholder="Сумма лимита"></div></div><div class="form-buttons"><button id="save-budget-btn" class="primary-button" type="button" data-i18n="save">Сохранить</button></div></div>
+                    <div id="budget-form" class="operation-form hidden" aria-labelledby="budget-form-title"><div class="form-heading"><div><h3 id="budget-form-title" data-i18n="newBudget">Новый бюджет</h3></div><button id="cancel-budget-btn" class="icon-button" type="button">×</button></div><div class="form-grid"><div class="form-field"><label for="budget-category" data-i18n="category">Категория</label><select id="budget-category"></select></div><div class="form-field"><label for="budget-amount" data-i18n="amount">Лимит</label><input type="number" id="budget-amount" min="1" step="0.01" data-i18n-placeholder="budgetLimitPlaceholder" placeholder="Сумма лимита"></div></div><div class="form-buttons"><button id="save-budget-btn" class="primary-button" type="button" data-i18n="save">Сохранить</button></div></div>
                 </section>
             </section>
             <section class="mobile-tab" data-mobile-tab="goals">
                 <section class="panel goals-section">
                     <div class="section-header section-header-wrap"><div><p class="eyebrow" data-i18n="goalsTitle">Цели</p><h2 data-i18n="financialGoals">Финансовые цели</h2></div><button id="add-goal-btn" class="secondary-button" type="button"><span aria-hidden="true">+</span> <span data-i18n="addGoal">Цель</span></button></div>
                     <div id="goals-list" class="goals-list"><p class="loading-state" data-i18n="loadingGoals">Загрузка целей...</p></div>
-                    <div id="goal-form" class="operation-form hidden" aria-labelledby="goal-form-title"><div class="form-heading"><div><h3 id="goal-form-title" data-i18n="newGoal">Новая цель</h3></div><button id="cancel-goal-btn" class="icon-button" type="button">×</button></div><div class="form-grid"><div class="form-field"><label for="goal-title" data-i18n="goalTitle">Название</label><input type="text" id="goal-title" required placeholder="Например: MacBook"></div><div class="form-field"><label for="goal-target" data-i18n="targetAmount">Целевая сумма</label><input type="number" id="goal-target" min="1" step="0.01" placeholder="700000"></div><div class="form-field"><label for="goal-current" data-i18n="currentAmount">Накоплено</label><input type="number" id="goal-current" min="0" step="0.01" placeholder="0" value="0"></div><div class="form-field"><label for="goal-deadline" data-i18n="deadline">Дедлайн</label><input type="text" id="goal-deadline" placeholder="Декабрь 2026"></div></div><div class="form-buttons"><button id="save-goal-btn" class="primary-button" type="button" data-i18n="save">Сохранить</button></div></div>
+                    <div id="goal-form" class="operation-form hidden" aria-labelledby="goal-form-title"><div class="form-heading"><div><h3 id="goal-form-title" data-i18n="newGoal">Новая цель</h3></div><button id="cancel-goal-btn" class="icon-button" type="button">×</button></div><div class="form-grid"><div class="form-field"><label for="goal-title" data-i18n="goalTitle">Название</label><input type="text" id="goal-title" required data-i18n-placeholder="goalTitlePlaceholder" placeholder="Например: MacBook"></div><div class="form-field"><label for="goal-target" data-i18n="targetAmount">Целевая сумма</label><input type="number" id="goal-target" min="1" step="0.01" placeholder="700000"></div><div class="form-field"><label for="goal-current" data-i18n="currentAmount">Накоплено</label><input type="number" id="goal-current" min="0" step="0.01" placeholder="0" value="0"></div><div class="form-field"><label for="goal-deadline" data-i18n="deadline">Дедлайн</label><input type="text" id="goal-deadline" data-i18n-placeholder="goalDeadlinePlaceholder" placeholder="Декабрь 2026"></div></div><div class="form-buttons"><button id="save-goal-btn" class="primary-button" type="button" data-i18n="save">Сохранить</button></div></div>
                 </section>
             </section>
             <section class="mobile-tab" data-mobile-tab="analytics">
@@ -97,8 +97,17 @@
                 <section class="panel categories-section"><div class="section-header"><div><p class="eyebrow" data-i18n="analytics">Аналитика</p><h2 data-i18n="expensesByCategory">Расходы по категориям</h2></div></div><div id="categories-list" class="categories-list"><p class="loading-state" data-i18n="loadingCategories">Загрузка категорий...</p></div><div class="chart-container"><canvas id="expenses-chart" width="600" height="220" data-i18n-aria-label="expensesChart" aria-label=""></canvas></div></section>
                 <section class="panel calendar-section"><div class="section-header"><div><p class="eyebrow" data-i18n="calendarTitle">Календарь</p><h2 data-i18n="financialCalendar">Финансовый календарь</h2></div></div><div id="calendar-grid" class="calendar-grid"></div><div id="calendar-details" class="calendar-details" data-i18n="noOperationsOnDate">Выберите день, чтобы увидеть операции.</div></section>
             </section>
-            <section class="mobile-tab" data-mobile-tab="settings"><section class="panel"><h2 data-i18n="settings">Настройки</h2></section></section>
-            <div id="tab-settings" class="tab-pane" hidden>
+            <section class="mobile-tab" data-mobile-tab="settings"><section class="panel"><h2 data-i18n="settings">Настройки</h2></section>
+                <section class="panel my-categories-section">
+                    <div class="section-header"><div><p class="eyebrow" data-i18n="categoriesTitle">Категории</p><h2 data-i18n="myCategories">Мои категории</h2></div></div>
+                    <div id="my-categories-list" class="my-categories-list"></div>
+                    <div class="form-grid">
+                        <div class="form-field"><label for="new-category-kind" data-i18n="operationType">Тип операции</label><select id="new-category-kind"><option value="Расход" data-i18n="expenseType">Расход</option><option value="Доход" data-i18n="incomeType">Доход</option></select></div>
+                        <div class="form-field"><label for="new-category-name" data-i18n="categoryName">Название</label><input type="text" id="new-category-name" maxlength="50" autocomplete="off"></div>
+                    </div>
+                    <div class="form-buttons"><button id="add-category-btn" class="primary-button" type="button" data-i18n="addCategory">Добавить категорию</button></div>
+                </section>
+                <div id="tab-settings" class="tab-pane">
                 <section class="panel settings-section">
                     <div class="section-header">
                         <div>
@@ -116,16 +125,16 @@
                             <div class="form-field">
                                 <label for="settings-language" data-i18n="languageSelector">Язык</label>
                                 <select id="settings-language">
-                                    <option value="RU">Русский (RU)</option>
                                     <option value="KZ">Қазақша (KZ)</option>
                                     <option value="EN">English (EN)</option>
+                                    <option value="RU">Русский (RU)</option>
                                 </select>
                             </div>
                             <div class="form-field">
                                 <label for="settings-theme" data-i18n="themeSelector">Тема</label>
                                 <select id="settings-theme">
-                                    <option value="light">Светлая</option>
-                                    <option value="dark">Тёмная</option>
+                                    <option value="light" data-i18n="lightTheme">Светлая тема</option>
+                                    <option value="dark" data-i18n="darkTheme">Тёмная тема</option>
                                 </select>
                             </div>
                             <div class="form-field">
@@ -134,9 +143,11 @@
                                     <option value="KZT">₸ (KZT)</option>
                                     <option value="USD">$ (USD)</option>
                                     <option value="EUR">€ (EUR)</option>
+                                    <option value="RUB">₽ (RUB)</option>
                                 </select>
                             </div>
                         </div>
+                        <div class="form-field settings-checkbox"><label><input id="settings-alerts-inapp" type="checkbox" checked> <span data-i18n="budgetAlertsInApp">Предупреждения о бюджете в приложении</span></label></div>
                         <button id="save-settings-btn" class="primary-button" type="button" data-i18n="save">Сохранить</button>
                     </div>
                     <div class="settings-group">
@@ -163,9 +174,10 @@
                         <button id="delete-account-btn" class="secondary-button danger-button" type="button" data-i18n="deleteAccount">Удалить аккаунт</button>
                     </div>
                 </section>
-            </div>
+                </div>
+            </section>
         </main>
-        <nav class="mobile-nav" aria-label="Основная навигация">
+        <nav class="mobile-nav" data-i18n-aria-label="navigationLabel" aria-label="Основная навигация">
             <button class="mobile-nav-item active" type="button" data-tab="overview"><span class="mobile-nav-icon" aria-hidden="true">🏠</span><span data-i18n="dashboard">Обзор</span></button>
             <button class="mobile-nav-item" type="button" data-tab="budgets"><span class="mobile-nav-icon" aria-hidden="true">💰</span><span data-i18n="budgetsTitle">Бюджеты</span></button>
             <button class="mobile-nav-item" type="button" data-tab="goals"><span class="mobile-nav-icon" aria-hidden="true">🎯</span><span data-i18n="goalsTitle">Цели</span></button>
@@ -243,7 +255,7 @@
                 <p id="import-preview-more" class="import-hint"></p>
                 <div id="import-errors" class="import-errors"></div>
                 <div class="form-buttons">
-                    <button id="import-confirm-btn" class="primary-button" type="button">Импортировать</button>
+                    <button id="import-confirm-btn" class="primary-button" type="button" data-i18n="importButton">Импортировать</button>
                     <button class="secondary-button import-back-btn" type="button" data-import-back="mapping" data-i18n="importBack">Назад</button>
                 </div>
             </section>
@@ -260,8 +272,8 @@
     <div id="auth-modal" class="modal-overlay" hidden>
         <div class="auth-modal">
             <div class="auth-tabs">
-                <button type="button" class="auth-tab active" data-auth-mode="login">Вход</button>
-                <button type="button" class="auth-tab" data-auth-mode="register">Регистрация</button>
+                <button type="button" class="auth-tab active" data-auth-mode="login" data-i18n="loginTab">Вход</button>
+                <button type="button" class="auth-tab" data-auth-mode="register" data-i18n="registerTab">Регистрация</button>
             </div>
             <form id="auth-form" class="auth-form">
                 <div class="form-field">
@@ -269,7 +281,7 @@
                     <input type="email" id="auth-email" required placeholder="example@domain.com">
                 </div>
                 <div class="form-field">
-                    <label for="auth-password">Пароль</label>
+                    <label for="auth-password" data-i18n="passwordLabel">Пароль</label>
                     <input type="password" id="auth-password" required placeholder="••••••••" minlength="6">
                 </div>
                 <div id="auth-error" class="auth-error"></div>

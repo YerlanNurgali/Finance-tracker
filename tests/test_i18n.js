@@ -64,3 +64,69 @@ test("every static i18n key used in the frontend exists in all languages", () =>
         assert.deepEqual(missing, [], `missing ${language} translations`);
     }
 });
+
+test("the sign-in, sign-out, navigation and placeholder texts are translated into every language", () => {
+    const translations = i18n.getTranslations();
+    const keys = ["loginTab", "registerTab", "passwordLabel", "signIn", "signOut", "signInOrRegister", "createAccount",
+        "loginSuccess", "accountCreated", "userExists", "navigationLabel", "budgetLimitPlaceholder", "goalTitlePlaceholder",
+        "goalDeadlinePlaceholder", "importButton"];
+    for (const key of keys) {
+        for (const language of i18n.SUPPORTED_LANGUAGES) {
+            const text = translations[language][key];
+            assert.ok(text && text !== key, `${language}.${key} is translated`);
+        }
+        assert.notEqual(translations.en[key], translations.ru[key], `en.${key} differs from ru`);
+        assert.notEqual(translations.kk[key], translations.ru[key], `kk.${key} differs from ru`);
+    }
+    i18n.setLanguage("en");
+    assert.equal(i18n.translateApiError("Пользователь с таким email уже существует", 400), "A user with this email already exists");
+    assert.equal(i18n.translateApiError("Неверный email или пароль", 401), "Incorrect email or password");
+    i18n.setLanguage("ru");
+});
+
+test("the languages are offered in the order KZ | EN | RU", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    assert.deepEqual(i18n.SUPPORTED_LANGUAGES, ["kk", "en", "ru"]);
+    const html = fs.readFileSync(path.join(__dirname, "..", "frontend", "index.html"), "utf8");
+    assert.deepEqual([...html.matchAll(/class="language-button"[^>]*data-language="(\w+)"/g)].map((match) => match[1]), ["kk", "en", "ru"]);
+    const select = html.match(/<select id="settings-language">([\s\S]*?)<\/select>/)[1];
+    assert.deepEqual([...select.matchAll(/value="(\w+)"/g)].map((match) => match[1]), ["KZ", "EN", "RU"]);
+});
+
+test("no visible text is written in Russian outside the translation files", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const frontend = path.join(__dirname, "..", "frontend");
+    const cyrillic = /[А-Яа-яЁёӘәҒғҚқҢңӨөҰұҮүҺһІі]/;
+
+    // index.html: Cyrillic text needs a data-i18n on its own element; placeholders and aria-labels
+    // need data-i18n-placeholder / data-i18n-aria-label. Two exceptions: the language names, which are
+    // written in their own language on purpose, and the sign-in button, whose label script.js sets.
+    const html = fs.readFileSync(path.join(frontend, "index.html"), "utf8");
+    const problems = [];
+    for (const match of html.matchAll(/<([a-z0-9]+)([^>]*)>([^<]*)/g)) {
+        const [, tag, attributes, text] = match;
+        if (cyrillic.test(text) && !/data-i18n(?!-)/.test(attributes)
+            && !(tag === "option" && /value="(KZ|EN|RU)"/.test(attributes)) && !/id="auth-submit-btn"/.test(attributes)) {
+            problems.push(`<${tag}> text: ${text.trim().slice(0, 40)}`);
+        }
+        for (const [name, marker] of [["placeholder", "data-i18n-placeholder"], ["aria-label", "data-i18n-aria-label"]]) {
+            const value = attributes.match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`));
+            if (value && cyrillic.test(value[1]) && !attributes.includes(marker)) problems.push(`<${tag}> ${name}: ${value[1].slice(0, 40)}`);
+        }
+    }
+    assert.deepEqual(problems, [], "Russian text in index.html without a translation key");
+
+    // script.js: the only Russian strings are the canonical values the API uses (operation types and
+    // categories), the server messages that must not sign the user out, and one fallback text.
+    const allowed = new Set(["Доход", "Расход", "Другое", "Еда", "Транспорт", "Дом", "Развлечения", "Здоровье", "Зарплата",
+        "Фриланс", "Бизнес", "Инвестиции", "Неверный текущий пароль", "Неверный пароль", "Неверный email или пароль",
+        "Недостаточно данных"]);
+    const source = fs.readFileSync(path.join(frontend, "script.js"), "utf8").split("\n")
+        .map((line) => line.replace(/^\s*\/\/.*$/, "").replace(/\s\/\/\s.*$/, "")).join("\n");
+    const found = [...source.matchAll(/(["'`])((?:\\.|(?!\1)[^\\\n])*)\1/g)]
+        .map((match) => match[2].replace(/\$\{(?:[^{}]|\{[^{}]*\})*\}/g, ""))  // code inside ${...} is not text
+        .filter((text) => cyrillic.test(text) && !allowed.has(text));
+    assert.deepEqual(found, [], "Russian string literals in script.js outside the allowed canonical values");
+});

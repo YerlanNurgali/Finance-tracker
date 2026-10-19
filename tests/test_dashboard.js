@@ -36,6 +36,7 @@ class Element {
         this.value = "";
         this.hidden = false;
         this.disabled = false;
+        this.checked = false;
         this.className = "";
         this.dataset = {};
         this.style = {};
@@ -849,6 +850,8 @@ const LATE_ACTIONS = [
 ];
 const LATE_OUTCOMES = [
     ["success", [200, { message: "ok", notification: "⚠️ Бюджет на Salary превышен!" }]],
+    ["success with alerts", [200, { message: "ok", notification: "⚠️ Бюджет на Еда превышен!", alerts: [
+        { budget_id: 1, category: "Еда", month: "2026-10", level: "exceeded", percent: 120, spent: 120, amount: 100 }] }]],
     ["error", [400, { detail: "Ошибка прежней сессии" }]]
 ];
 
@@ -1120,3 +1123,411 @@ for (const status of [401, 404, 422, 500, 503]) {
         assert.equal(app.el("export-csv-btn").disabled, false);
     });
 }
+
+// Budget alert switch in the settings -------------------------------------------
+
+const meWith = (settings) => ({ "GET /auth/me": [200, { id: 1, email: USER, settings: { language: "RU", theme: "light", currency: "KZT", ...settings } }] });
+const profileCalls = (app) => app.calls.filter((call) => call.path === "/auth/profile");
+
+test("the in-app budget alert switch follows the account's setting", async () => {
+    const off = await boot(meWith({ budget_alerts_inapp: false }));
+    assert.equal(off.el("settings-alerts-inapp").checked, false);
+    const on = await boot(meWith({ budget_alerts_inapp: true }));
+    assert.equal(on.el("settings-alerts-inapp").checked, true);
+});
+
+test("an account without the setting has the switch on", async () => {
+    const app = await boot();
+    assert.equal(app.el("settings-alerts-inapp").checked, true);
+});
+
+test("saving the settings sends the switch as a boolean", async () => {
+    const app = await boot({ ...meWith({ budget_alerts_inapp: true }), "PUT /auth/profile": [200, {}] });
+    app.el("settings-alerts-inapp").checked = false;
+    await app.el("save-settings-btn").onclick();
+    assert.equal(JSON.parse(profileCalls(app)[0].body).budget_alerts_inapp, false);
+    app.el("settings-alerts-inapp").checked = true;
+    await app.el("save-settings-btn").onclick();
+    assert.equal(JSON.parse(profileCalls(app)[1].body).budget_alerts_inapp, true);
+});
+
+test("signing out puts the switch back to its default for the next account", async () => {
+    const app = await boot(meWith({ budget_alerts_inapp: false }));
+    assert.equal(app.el("settings-alerts-inapp").checked, false);
+    await signOut(app);
+    assert.equal(app.el("settings-alerts-inapp").checked, true);
+});
+
+test("the alert texts exist in every language and fill in their values", () => {
+    const values = { category: "Еда", percent: 85, spent: "850 ₸", amount: "1 000 ₸" };
+    for (const language of ["ru", "en", "kk"]) {
+        for (const key of ["budgetAlertWarning", "budgetAlertLimit", "budgetAlertExceeded", "budgetAlertsInApp"]) {
+            const text = vm.runInContext(`i18n.setLanguage(${JSON.stringify(language)}); i18n.t(${JSON.stringify(key)}, ${JSON.stringify(values)})`,
+                createApp().context);
+            assert.ok(text && text !== key, `${language}.${key} is translated`);
+            assert.ok(!/\{\w+\}/.test(text), `${language}.${key} has no unfilled placeholder: ${text}`);
+        }
+    }
+});
+
+// Budget alerts shown after a save ---------------------------------------------------
+
+const ALERT_85 = { budget_id: 1, category: "Еда", month: "2026-10", level: "warning", percent: 85, spent: 850, amount: 1000 };
+const ALERT_LIMIT = { budget_id: 1, category: "Еда", month: "2026-10", level: "limit", percent: 100, spent: 1000, amount: 1000 };
+const ALERT_OVER = { budget_id: 2, category: "Дом", month: "2026-10", level: "exceeded", percent: 120.5, spent: 1205, amount: 1000 };
+const saveExpense = async (app) => {
+    app.el("operation-amount").value = "10";
+    app.el("operation-category").value = "Еда";
+    await app.el("save-operation-btn").onclick();
+};
+const toast = (app) => ({ text: app.el("notification-message").textContent, className: app.el("notification").className, hidden: app.el("notification").hidden });
+
+test("a warning alert is shown in the interface language, with the category translated", async () => {
+    const texts = {};
+    for (const language of ["ru", "en", "kk"]) {
+        const app = await boot({ "POST /operations": [201, { message: "ok", notification: null, alerts: [ALERT_85] }] });
+        app.run(`i18n.setLanguage("${language}")`);
+        await saveExpense(app);
+        texts[language] = toast(app);
+        assert.equal(texts[language].className, "notification warning");
+        assert.equal(texts[language].hidden, false);
+    }
+    assert.match(texts.ru.text, /^Бюджет «Еда»: израсходовано 85%/);
+    assert.match(texts.en.text, /^Budget “Food”: 85% used/);
+    assert.match(texts.kk.text, /^«Тамақ» бюджеті: 85% жұмсалды/);
+    assert.ok(!/\{\w+\}/.test(texts.ru.text + texts.en.text + texts.kk.text), "no placeholder is left unfilled");
+});
+
+test("limit and exceeded alerts have their own text and style", async () => {
+    const limit = await boot({ "POST /operations": [201, { message: "ok", alerts: [ALERT_LIMIT] }] });
+    await saveExpense(limit);
+    assert.match(toast(limit).text, /исчерпан/);
+    assert.equal(toast(limit).className, "notification warning");
+    const over = await boot({ "POST /operations": [201, { message: "ok", alerts: [ALERT_OVER] }] });
+    await saveExpense(over);
+    assert.match(toast(over).text, /превышен/);
+    assert.equal(toast(over).className, "notification error");
+});
+
+test("several alerts are shown together and the toast takes the worst style", async () => {
+    const app = await boot({ "POST /operations": [201, { message: "ok", alerts: [ALERT_85, ALERT_OVER] }] });
+    await saveExpense(app);
+    assert.match(toast(app).text, /Еда.*•.*Дом/);
+    assert.equal(toast(app).className, "notification error");
+});
+
+test("without alerts the usual success message is shown", async () => {
+    const app = await boot({ "POST /operations": [201, { message: "ok", notification: null, alerts: [] }] });
+    await saveExpense(app);
+    assert.equal(toast(app).text, app.run('i18n.t("addedSuccess")'));
+    assert.equal(toast(app).className, "notification success");
+});
+
+test("an empty alerts list wins over a stale notification text", async () => {
+    // The server applies the account's switch to `alerts`; a switched-off account must see nothing.
+    const app = await boot({ "POST /operations": [201, { message: "ok", notification: "⚠️ Бюджет на Еда превышен!", alerts: [] }] });
+    await saveExpense(app);
+    assert.equal(toast(app).text, app.run('i18n.t("addedSuccess")'));
+});
+
+test("a server that only sends the notification sentence is still understood", async () => {
+    const app = await boot({ "POST /operations": [201, { message: "ok", notification: "⚠️ Бюджет на Еда превышен!" }] });
+    await saveExpense(app);
+    assert.equal(toast(app).text, "⚠️ Бюджет на Еда превышен!");
+});
+
+test("editing an operation shows the alerts of the update", async () => {
+    const app = await boot({ "PUT /operations/20": [200, { message: "ok", notification: null, alerts: [ALERT_85] }] });
+    app.run("editingOperationId = 20");
+    await saveExpense(app);
+    assert.match(toast(app).text, /израсходовано 85%/);
+});
+
+test("deleting an operation or refreshing the page never shows an alert", async () => {
+    const app = await boot({ "DELETE /operations/20": [200, { message: "ok" }], "GET /budgets": [200, [
+        { id: 1, category: "Еда", amount: 1000, spent: 950, percent: 95, level: 1, exceeded: false }] ] });
+    await app.run("deleteOperation(20)");
+    assert.equal(toast(app).text, app.run('i18n.t("deletedSuccess")'));
+    await app.run("loadDashboard()");
+    await app.run("loadBudgets()");
+    assert.doesNotMatch(toast(app).text, /израсходовано|превышен|исчерпан/);
+});
+
+test("a confirmed import shows the alerts it caused after the dashboard has reloaded", async () => {
+    const app = createApp({
+        ids: [...DASHBOARD_IDS, ...IMPORT_IDS],
+        routes: { ...apiRoutes(OLDER), "POST /import/csv/commit": [200, { imported: 2, duplicate_rows: 0, error_rows: 0, errors: [], columns: [], notification: null, alerts: [ALERT_OVER] }] },
+        storage: signedIn()
+    });
+    app.run('importState.file = "date,amount\\n"; importState.preview = { valid_rows: 2, duplicate_rows: 0, rows: [], errors: [], error_rows: 0, total_rows: 2 }');
+    await app.run("confirmImport()");
+    assert.match(toast(app).text, /Дом.*превышен/);
+    assert.equal(toast(app).className, "notification error");
+});
+
+test("a repeated import, which stores nothing, shows no alert", async () => {
+    const app = createApp({
+        ids: [...DASHBOARD_IDS, ...IMPORT_IDS],
+        routes: { ...apiRoutes(OLDER), "POST /import/csv/commit": [200, { imported: 0, duplicate_rows: 2, error_rows: 0, errors: [], columns: [], notification: null, alerts: [] }] },
+        storage: signedIn()
+    });
+    app.run('importState.file = "date,amount\\n"; importState.preview = { valid_rows: 2, duplicate_rows: 2, rows: [], errors: [], error_rows: 0, total_rows: 2 }');
+    await app.run("confirmImport()");
+    assert.doesNotMatch(toast(app).text, /израсходовано|превышен|исчерпан/);
+});
+
+test("budget bars are amber from 80 percent and red when exceeded", async () => {
+    const budgets = [
+        { id: 1, category: "Еда", amount: 1000, spent: 100, percent: 10, level: 0, exceeded: false },
+        { id: 2, category: "Дом", amount: 1000, spent: 850, percent: 85, level: 1, exceeded: false },
+        { id: 3, category: "Здоровье", amount: 1000, spent: 1000, percent: 100, level: 2, exceeded: false },
+        { id: 4, category: "Транспорт", amount: 1000, spent: 1500, percent: 150, level: 3, exceeded: true }
+    ];
+    const app = createApp({ routes: apiRoutes(OLDER, { "GET /budgets": [200, budgets] }) });
+    await app.run("loadBudgets()");
+    const fills = allNodes(app.elements.get("budgets-list")).filter((node) => String(node.className).startsWith("budget-progress-fill"));
+    assert.deepEqual(fills.map((node) => node.className.trim()), [
+        "budget-progress-fill", "budget-progress-fill warning", "budget-progress-fill warning", "budget-progress-fill exceeded"
+    ]);
+});
+
+// User categories ----------------------------------------------------------------------
+
+const CATEGORY_LIST = {
+    limit: 50,
+    categories: [
+        { id: null, kind: "Расход", name: "Еда", builtin: true },
+        { id: 5, kind: "Расход", name: "Хобби", builtin: false },
+        { id: 6, kind: "Доход", name: "Подарки", builtin: false }
+    ]
+};
+const optionValues = (app, id) => app.el(id).children.map((option) => option.value);
+const namesOf = (app, type) => JSON.parse(app.run(`JSON.stringify(categoryNames(${JSON.stringify(type)}))`));
+
+test("the user's categories are offered by kind in the form and the budget form, and in the filter", async () => {
+    const app = await boot({ "GET /categories": [200, CATEGORY_LIST] });
+    assert.deepEqual(namesOf(app, "Расход"), ["Еда", "Транспорт", "Дом", "Развлечения", "Здоровье", "Другое", "Хобби"]);
+    assert.deepEqual(namesOf(app, "Доход"), ["Зарплата", "Фриланс", "Бизнес", "Инвестиции", "Другое", "Подарки"]);
+    // The stub form is on its default kind, income.
+    assert.ok(optionValues(app, "operation-category").includes("Подарки"));
+    assert.ok(!optionValues(app, "operation-category").includes("Хобби"));
+    assert.ok(optionValues(app, "operation-category-filter").includes("Хобби"));
+    assert.ok(optionValues(app, "operation-category-filter").includes("Подарки"));
+    assert.ok(optionValues(app, "budget-category").includes("Хобби"));
+    assert.ok(!optionValues(app, "budget-category").includes("Подарки"));
+    assert.equal(allNodes(app.el("my-categories-list")).filter((node) => node.className === "my-category-item").length, 2);
+});
+
+test("when the categories cannot be loaded the built-in ones work and no error is shown", async () => {
+    const app = await boot({ "GET /categories": [500, { detail: "x" }] });
+    assert.deepEqual(namesOf(app, "Расход"), ["Еда", "Транспорт", "Дом", "Развлечения", "Здоровье", "Другое"]);
+    assert.equal(notice(app), "");
+    assert.equal(historyItems(app).length, 8, "the dashboard itself still loads");
+});
+
+test("signing out removes the previous user's categories from every list", async () => {
+    const app = await boot({ "GET /categories": [200, CATEGORY_LIST] });
+    assert.ok(optionValues(app, "operation-category-filter").includes("Хобби"));
+    await signOut(app);
+    assert.equal(app.run("userCategories.length"), 0);
+    assert.ok(!optionValues(app, "operation-category-filter").includes("Хобби"));
+    assert.ok(!optionValues(app, "operation-category").includes("Подарки"));
+    assert.ok(!optionValues(app, "budget-category").includes("Хобби"));
+    assert.ok(!textOfPage(app).includes("Хобби"));
+});
+
+test("adding a category sends its kind and trimmed name, then shows it", async () => {
+    let created = false;
+    const app = await boot({
+        "GET /categories": () => [200, created ? CATEGORY_LIST : { limit: 50, categories: [] }],
+        "POST /categories": () => { created = true; return [201, { message: "ok", category: CATEGORY_LIST.categories[1] }]; }
+    });
+    app.el("new-category-kind").value = "Расход";
+    app.el("new-category-name").value = "  Хобби ";
+    await app.el("add-category-btn").onclick();
+    const call = app.calls.find((entry) => entry.method === "POST" && entry.path === "/categories");
+    assert.deepEqual(JSON.parse(call.body), { kind: "Расход", name: "Хобби" });
+    assert.equal(app.el("new-category-name").value, "");
+    assert.ok(optionValues(app, "operation-category-filter").includes("Хобби"));
+    assert.equal(notice(app), app.run('i18n.t("categoryAdded")'));
+});
+
+test("a refused category shows the server message in the interface language", async () => {
+    const app = await boot({ "POST /categories": [409, { detail: "Категория с таким названием уже существует" }] });
+    app.run('i18n.setLanguage("en")');
+    app.el("new-category-name").value = "Хобби";
+    await app.el("add-category-btn").onclick();
+    assert.equal(notice(app), "A category with this name already exists");
+    assert.equal(app.el("new-category-name").value, "Хобби", "the typed name is kept");
+});
+
+test("renaming and deleting a category reload the dashboard, which carries the new names", async () => {
+    const app = await boot({
+        "GET /categories": [200, CATEGORY_LIST],
+        "PUT /categories/5": [200, { message: "ok", operations_updated: 2, budgets_updated: 0 }],
+        "DELETE /categories/6": [200, { message: "ok", moved_to: "Другое", operations_moved: 1 }]
+    });
+    app.context.prompt = () => "  Увлечения ";
+    let before = app.calls.length;
+    await app.run("renameCategory({ id: 5, kind: 'Расход', name: 'Хобби' })");
+    await settle();
+    let sent = app.calls.slice(before);
+    assert.deepEqual(JSON.parse(sent.find((call) => call.method === "PUT").body), { name: "Увлечения" });
+    assert.ok(sent.some((call) => call.path === "/operations?period=all"), "operations are reloaded");
+    assert.equal(notice(app), app.run('i18n.t("categoryRenamed")'));
+
+    before = app.calls.length;
+    await app.run("deleteCategory({ id: 6, kind: 'Доход', name: 'Подарки' })");
+    await settle();
+    sent = app.calls.slice(before);
+    assert.ok(sent.some((call) => call.method === "DELETE" && call.path === "/categories/6"));
+    assert.ok(sent.some((call) => call.path === "/operations?period=all"));
+    assert.equal(notice(app), app.run('i18n.t("categoryDeleted")'));
+});
+
+test("a rename that is cancelled or unchanged sends nothing", async () => {
+    const app = await boot({ "GET /categories": [200, CATEGORY_LIST] });
+    const before = app.calls.length;
+    for (const answer of [null, "", "   ", "Хобби"]) {
+        app.context.prompt = () => answer;
+        await app.run("renameCategory({ id: 5, kind: 'Расход', name: 'Хобби' })");
+    }
+    assert.equal(app.calls.length, before);
+});
+
+test("a categories response that arrives after sign-out is not drawn", async () => {
+    const late = deferred();
+    const app = await boot({ "GET /categories": () => late.promise });
+    await signOut(app);
+    late.release([200, CATEGORY_LIST]);
+    await settle();
+    assert.equal(app.run("userCategories.length"), 0);
+    assert.ok(!optionValues(app, "operation-category-filter").includes("Хобби"));
+});
+
+test("the category texts and server errors exist in all three languages", () => {
+    const app = createApp();
+    const messages = ["Название категории должно содержать от 1 до 50 символов", "Название категории содержит недопустимые символы",
+        "Название совпадает со встроенной категорией", "Достигнут лимит пользовательских категорий (50)",
+        "Категория с таким названием уже существует", "Категория не найдена",
+        "На категорию назначен бюджет: удалите или измените бюджет и повторите"];
+    const keys = ["categoriesTitle", "myCategories", "categoryName", "addCategory", "noCustomCategories", "renameCategory",
+        "deleteCategory", "renameCategoryPrompt", "deleteCategoryConfirm", "categoryAdded", "categoryRenamed", "categoryDeleted"];
+    const unmapped = app.run(`${JSON.stringify(messages)}.filter((message) => !i18n.apiErrorKeys[message]).join("|")`);
+    assert.equal(unmapped, "", "every category error the server sends has a translation key");
+    const missing = app.run(`(() => {
+        const all = i18n.getTranslations();
+        const keys = ${JSON.stringify(keys)}.concat(Object.values(i18n.apiErrorKeys).filter((key) => /^category/.test(key)));
+        const missing = [];
+        for (const language of ["ru", "en", "kk"]) {
+            for (const key of keys) {
+                const text = all[language][key];
+                if (!text || /\\{\\w+\\}/.test(i18n.setLanguage(language) && i18n.t(key, { name: "A", target: "B" }))) missing.push(language + ":" + key);
+            }
+        }
+        return missing.join(",");
+    })()`);
+    assert.equal(missing, "");
+});
+
+// Account settings ---------------------------------------------------------------------
+
+test("the account settings are inside the settings tab, not hidden, with the languages in KZ | EN | RU order", () => {
+    const html = fs.readFileSync(path.join(FRONTEND, "index.html"), "utf8");
+    const start = html.indexOf('data-mobile-tab="settings"');
+    const end = html.indexOf("</main>");
+    assert.ok(start > 0 && end > start, "the settings tab exists");
+    const tab = html.slice(start, end);
+    assert.ok(!/id="tab-settings"[^>]*\bhidden\b/.test(html), "the settings pane is not hidden");
+    for (const id of ["tab-settings", "settings-language", "settings-theme", "settings-currency", "settings-alerts-inapp",
+        "save-settings-btn", "change-password-btn", "delete-account-btn", "my-categories-list"]) {
+        assert.ok(tab.includes(`id="${id}"`), `${id} is inside the settings tab`);
+    }
+    assert.equal(html.split('data-mobile-tab="').length - 1, 5, "five tabs, none added after the settings one");
+    const select = tab.match(/<select id="settings-language">([\s\S]*?)<\/select>/)[1];
+    assert.deepEqual([...select.matchAll(/value="(\w+)"/g)].map((match) => match[1]), ["KZ", "EN", "RU"]);
+    const currencies = tab.match(/<select id="settings-currency">([\s\S]*?)<\/select>/)[1];
+    assert.deepEqual([...currencies.matchAll(/value="(\w+)"/g)].map((match) => match[1]), ["KZT", "USD", "EUR", "RUB"]);
+});
+
+// Sign-in dialog, sign-out button and calendar in the interface language -------------------
+
+test("changing the language relabels the sign-out button and the dialog button without a reload", async () => {
+    const app = await boot();
+    const logout = () => allNodes(app.el("user-auth-area")).find((node) => node.id === "logout-btn");
+    assert.equal(logout().textContent, "Выйти");
+    for (const [language, expected] of [["en", "Sign out"], ["kk", "Шығу"], ["ru", "Выйти"]]) {
+        app.run(`changeLanguage("${language}")`);
+        assert.equal(logout().textContent, expected, language);
+        assert.equal(app.el("auth-submit-btn").textContent, app.run('i18n.t("signIn")'), language);
+    }
+    app.run('authMode = "register"; changeLanguage("kk")');
+    assert.equal(app.el("auth-submit-btn").textContent, "Аккаунт жасау");
+});
+
+test("the sign-in button of a signed-out page follows the language too", async () => {
+    const app = await boot({}, { storage: {} });
+    const label = () => allNodes(app.el("user-auth-area")).find((node) => node.tagName === "BUTTON").textContent;
+    assert.equal(label(), "Войти / Регистрация");
+    app.run('changeLanguage("en")');
+    assert.equal(label(), "Sign in / Register");
+    app.run('changeLanguage("kk")');
+    assert.equal(label(), "Кіру / Тіркелу");
+});
+
+test("the calendar weekdays follow the interface language, Monday first", async () => {
+    const app = await boot();
+    const headers = () => app.el("calendar-grid").children.filter((node) => node.className === "calendar-day-header").map((node) => node.textContent);
+    const expected = (locale) => Array.from({ length: 7 }, (_, index) =>
+        new Intl.DateTimeFormat(locale, { weekday: "short" }).format(new Date(2024, 0, 1 + index)));
+    for (const [language, locale] of [["en", "en-US"], ["kk", "kk-KZ"], ["ru", "ru-RU"]]) {
+        app.run(`changeLanguage("${language}")`);
+        assert.deepEqual(headers(), expected(locale), language);
+    }
+    app.run('changeLanguage("en")');
+    assert.deepEqual(headers(), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+});
+
+test("the sign-in dialog translates known server messages and hides unknown ones", async () => {
+    const wrong = await boot({ "POST /auth/login": [401, { detail: "Неверный email или пароль" }] }, { storage: {} });
+    wrong.run('i18n.setLanguage("en")');
+    wrong.el("auth-email").value = "a@example.test";
+    wrong.el("auth-password").value = "secret12";
+    await wrong.el("auth-form").onsubmit({ preventDefault() {} });
+    assert.equal(wrong.el("auth-error").textContent, "Incorrect email or password");
+
+    const taken = await boot({ "POST /auth/register": [400, { detail: "Пользователь с таким email уже существует" }] }, { storage: {} });
+    taken.run('authMode = "register"; i18n.setLanguage("kk")');
+    taken.el("auth-email").value = "taken@example.test";
+    taken.el("auth-password").value = "secret12";
+    await taken.el("auth-form").onsubmit({ preventDefault() {} });
+    assert.equal(taken.el("auth-error").textContent, "Бұл email бар пайдаланушы бұрыннан тіркелген");
+
+    const broken = await boot({ "POST /auth/login": [500, { detail: "Traceback: secret internals" }] }, { storage: {} });
+    broken.run('i18n.setLanguage("en")');
+    broken.el("auth-email").value = "a@example.test";
+    broken.el("auth-password").value = "secret12";
+    await broken.el("auth-form").onsubmit({ preventDefault() {} });
+    assert.equal(broken.el("auth-error").textContent, "Server error");
+    assert.ok(!broken.el("auth-error").textContent.includes("secret"));
+});
+
+test("the success message of signing in and registering is in the interface language", async () => {
+    const login = await boot({}, { storage: {} });
+    login.run('i18n.setLanguage("en")');
+    login.el("auth-email").value = USER;
+    login.el("auth-password").value = "secret12";
+    await login.el("auth-form").onsubmit({ preventDefault() {} });
+    await settle();
+    assert.ok(login.calls.some((call) => call.path === "/auth/login"), "the login request was made");
+    assert.equal(notice(login), "Signed in successfully!");
+
+    const register = await boot({ "POST /auth/register": [201, { access_token: "t", token_type: "bearer", email: USER }] }, { storage: {} });
+    register.run('authMode = "register"; i18n.setLanguage("kk")');
+    register.el("auth-email").value = USER;
+    register.el("auth-password").value = "secret12";
+    await register.el("auth-form").onsubmit({ preventDefault() {} });
+    await settle();
+    assert.ok(register.calls.some((call) => call.path === "/auth/register"));
+    assert.equal(notice(register), "Аккаунт сәтті жасалды!");
+});

@@ -58,12 +58,12 @@ test("the app shell is still served network-first with an offline copy", () => {
 });
 
 test("activation removes caches of earlier versions", async () => {
-    const worker = loadWorker(["finance-tracker-v7", "finance-tracker-v8", "finance-tracker-v9"]);
-    assert.equal(worker.cacheName, "finance-tracker-v9");
+    const worker = loadWorker(["finance-tracker-v9", "finance-tracker-v10", "finance-tracker-v11"]);
+    assert.equal(worker.cacheName, "finance-tracker-v11");
     let pending;
     worker.listeners.activate({ waitUntil: (promise) => { pending = promise; } });
     await pending;
-    assert.deepEqual(worker.deleted, ["finance-tracker-v7", "finance-tracker-v8"]);
+    assert.deepEqual(worker.deleted, ["finance-tracker-v9", "finance-tracker-v10"]);
 });
 
 test("the app shell bypasses copies the browser cached before the fix", async () => {

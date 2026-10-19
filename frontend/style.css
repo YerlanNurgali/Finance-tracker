@@ -140,6 +140,7 @@ select:focus, input:focus { border-color: var(--accent); }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-field label { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: .8rem; font-weight: 750; }
 .form-field input, .form-field select { width: 100%; max-width: none; }
+.form-field-wide { grid-column: 1 / -1; }
 .form-buttons { display: flex; gap: 9px; margin-top: 16px; }
 .form-buttons button { flex: 1; }
 .operation { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border); animation: fade-up 240ms ease both; }
@@ -156,6 +157,7 @@ select:focus, input:focus { border-color: var(--accent); }
 .error-state { color: var(--danger); }
 .notification { position: fixed; z-index: 10; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 12px; max-width: min(390px, calc(100vw - 32px)); padding: 13px 14px 13px 17px; border: 1px solid var(--border); border-left: 4px solid var(--success); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); animation: toast-in 220ms ease both; }
 .notification.error { border-left-color: var(--danger); }
+.notification.warning { border-left-color: var(--warning); }
 .notification .icon-button { margin-left: auto; min-width: 28px; min-height: 28px; }
 .footer { padding: 25px 0 5px; color: var(--text-secondary); font-size: .78rem; text-align: center; }
 
@@ -215,8 +217,15 @@ select:focus, input:focus { border-color: var(--accent); }
 .budget-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
 .budget-progress-bg { background: var(--border); border-radius: 6px; height: 10px; width: 100%; overflow: hidden; }
 .budget-progress-fill { background: var(--success); height: 100%; transition: width 0.3s ease; }
+.budget-progress-fill.warning { background: var(--warning); }
 .budget-progress-fill.exceeded { background: var(--danger); }
 .budget-footer { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary); }
+
+/* My categories */
+.my-categories-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; }
+.my-category-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; background: var(--background); border: 1px solid var(--border); border-radius: 10px; }
+.my-category-name { min-width: 0; font-weight: 650; overflow-wrap: anywhere; }
+.my-category-kind { margin-left: 8px; color: var(--text-secondary); font-size: .78rem; font-weight: 600; }
 
 /* Goals */
 .goals-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
@@ -298,6 +307,9 @@ select:focus, input:focus { border-color: var(--accent); }
 .import-checkbox { display: flex; align-items: flex-end; }
 .import-checkbox label { display: flex; align-items: center; gap: 8px; color: var(--text); }
 .import-checkbox input { width: auto; min-height: 0; }
+.settings-checkbox { margin: 4px 0 14px; }
+.settings-checkbox label { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.settings-checkbox input { width: auto; min-height: 0; }
 .import-modal [data-import-mode][hidden] { display: none; }
 .import-modal h4 { margin: 16px 0 8px; font-size: .95rem; }
 .import-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-small); }
