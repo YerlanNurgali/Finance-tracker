@@ -6,13 +6,15 @@ import json
 import logging
 import math
 import os
+import re
+import threading
 
 from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator, validator
+from pydantic import BaseModel, Field, StrictBool, field_validator, validator
 from typing import Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -22,6 +24,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.responses import PlainTextResponse
 
 import bank_import
+import budget_alerts
 import database
 import auth
 
@@ -279,10 +282,31 @@ class GoalProgressPayload(BaseModel):
     current_amount: float = Field(..., ge=0, allow_inf_nan=False)
 
 
+class CategoryPayload(TextPayload):
+    """A new user category. Only the kind and the name are read: the owner is always the
+    signed-in user. The name is trimmed and its length checked (1-50) by the data layer;
+    the limit here only keeps absurd input out."""
+    kind: str
+    name: str = Field(..., min_length=1, max_length=200)
+
+    @validator("kind")
+    def valid_kind(cls, value):
+        if value not in database.BUILTIN_CATEGORIES:
+            raise ValueError(database.CATEGORY_KIND_MESSAGE)
+        return value
+
+
+class CategoryRenamePayload(TextPayload):
+    name: str = Field(..., min_length=1, max_length=200)
+
+
 class ProfileSettingsPayload(TextPayload):
     language: Optional[str] = Field(default=None, max_length=10)
     theme: Optional[str] = Field(default=None, max_length=10)
     currency: Optional[str] = Field(default=None, max_length=10)
+    # Real booleans only: "false" or 0 from a client is a mistake, not a choice.
+    budget_alerts_inapp: Optional[StrictBool] = None
+    budget_alerts_push: Optional[StrictBool] = None
 
     @validator("language")
     def valid_lang(cls, v):
@@ -407,7 +431,9 @@ def update_profile(payload: ProfileSettingsPayload, current_user: dict = Depends
         current_user["id"],
         language=payload.language,
         theme=payload.theme,
-        currency=payload.currency
+        currency=payload.currency,
+        budget_alerts_inapp=payload.budget_alerts_inapp,
+        budget_alerts_push=payload.budget_alerts_push,
     )
     return {"message": "Профиль обновлен"}
 
@@ -439,12 +465,45 @@ def delete_account(payload: DeleteAccountPayload, current_user: dict = Depends(g
 
 # --- Date & Filtering Helpers ---
 def parse_operation_date(date_string):
-    for date_format in ("%d.%m.%Y %H:%M", "%d.%m.%Y, %H:%M", "%d.%m.%Y, %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d"):
+    return budget_alerts.parse_date(date_string)
+
+
+# The date of a NEW or EDITED operation. Stored rows are never rewritten or re-checked:
+# they keep whatever text they have. The formats accepted here are the ones the budgets
+# can already read (budget_alerts.DATE_FORMATS) plus a bare "DD.MM.YYYY" (older API
+# clients send it). The frontend and the CSV import store "DD.MM.YYYY, HH:MM:SS".
+OPERATION_DATE_FORMATS = budget_alerts.DATE_FORMATS + ("%d.%m.%Y",)
+STORED_DATE_FORMAT = "%d.%m.%Y, %H:%M:%S"
+# A date outside this range is far more likely a typo than a real operation. The upper
+# limit lets a planned operation be entered a month ahead and absorbs the difference
+# between the user's clock and the server's, whatever the time zone.
+MIN_OPERATION_DATE = datetime(2000, 1, 1)
+MAX_OPERATION_DATE_AHEAD = timedelta(days=31)
+DATE_INVALID = "Некорректная дата операции"
+DATE_TOO_OLD = "Дата операции не может быть раньше 01.01.2000"
+DATE_TOO_FAR = "Дата операции не может быть позже, чем через 31 день"
+
+
+def checked_operation_date(value, now=None):
+    """The text to store as the date of a new or edited operation, or a 422 with a
+    message. Nothing is guessed: an unreadable date is refused, never replaced by the
+    current one. The text is stored as sent (trimmed), except that a date without a time
+    becomes midnight in the stored format, because the budgets cannot read a bare
+    "DD.MM.YYYY" and would leave that operation out of every month."""
+    text = value.strip() if isinstance(value, str) else ""
+    for date_format in OPERATION_DATE_FORMATS:
         try:
-            return datetime.strptime(date_string, date_format)
-        except (ValueError, TypeError):
+            parsed = datetime.strptime(text, date_format)
+        except ValueError:
             continue
-    return None
+        break
+    else:
+        raise HTTPException(status_code=422, detail=DATE_INVALID)
+    if parsed < MIN_OPERATION_DATE:
+        raise HTTPException(status_code=422, detail=DATE_TOO_OLD)
+    if parsed > (now or datetime.now()) + MAX_OPERATION_DATE_AHEAD:
+        raise HTTPException(status_code=422, detail=DATE_TOO_FAR)
+    return parsed.strftime(STORED_DATE_FORMAT) if date_format == "%d.%m.%Y" else text
 
 
 def filter_operations(rows, period):
@@ -520,57 +579,157 @@ def get_statistics(period: str = Query("all"), current_user: dict = Depends(get_
 
 @app.post("/operations", status_code=201)
 def create_operation(operation: OperationPayload, current_user: dict = Depends(get_current_user)):
+    date = checked_operation_date(operation.date)
     try:
-        database.add_operation(current_user["id"], operation.date, operation.operation_type, operation.amount, operation.category)
+        database.add_operation(current_user["id"], date, operation.operation_type, operation.amount, operation.category)
     except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    notification = None
-    if operation.operation_type == "Расход" and operation.category:
-        try:
-            notification = _budget_exceeded_notification(current_user["id"], operation.category)
-        except Exception as exc:
-            # The operation is already saved: an error here would invite a retry that
-            # stores it twice, so the warning is skipped. Only the type is logged.
-            logger.error("Budget check failed for user %s: %s", current_user["id"], type(exc).__name__)
-
-    return {"message": "Операция добавлена", "notification": notification}
+    alerts = _budget_alerts(current_user["id"], _expense_changes(operation.operation_type, operation.category, date))
+    return {"message": "Операция добавлена", **_alerts_response(alerts)}
 
 
-def _budget_exceeded_notification(user_id, category):
-    budgets = database.get_budgets(user_id)
-    rows = _rows(user_id, "month")
-    spent_map = {}
-    for row in rows:
-        if row[2] == "Расход" and row[4]:
-            spent_map[row[4]] = spent_map.get(row[4], 0.0) + float(row[3])
+# --- Budget alerts ---
+def _expense_changes(operation_type, category, date, notify=True):
+    """The (category, date, notify) a saved, edited or removed operation touches:
+    only expenses count against budgets."""
+    if operation_type == "Расход" and category:
+        return [(category, date, notify)]
+    return []
 
-    for b in budgets:
-        if b[1] == category and spent_map.get(b[1], 0.0) > float(b[2]):
-            return f"⚠️ Бюджет на {b[1]} превышен!"
-    return None
+
+def _alert_targets(changes):
+    """(category, calendar month, notify) for every budget measurement a change needs.
+    Only the current month alerts; other months just keep their stored level."""
+    current = set(budget_alerts.current_month_keys())
+    targets = {}
+    for category, date, notify in changes:
+        month = budget_alerts.month_key(date)
+        if category and month:
+            targets[(category, month)] = targets.get((category, month), False) or (notify and month in current)
+    return [(category, month, notify) for (category, month), notify in targets.items()]
+
+
+def _budget_alerts(user_id, changes):
+    """Recalculates the budgets the changes touch and returns the alerts the user
+    should see in the app. Never raises: the change itself is already saved, and an
+    error here must not turn it into a failure that invites a retry (and a duplicate).
+    Only the type of an error is logged."""
+    try:
+        targets = _alert_targets(changes)
+        if not targets:
+            return []
+        alerts = database.evaluate_budget_alerts(user_id, targets)
+        if alerts and not database.get_user_settings(user_id).get("budget_alerts_inapp", True):
+            return []
+        return alerts
+    except Exception as exc:
+        logger.error("Budget check failed for user %s: %s", user_id, type(exc).__name__)
+        return []
+
+
+def _alerts_response(alerts):
+    """``alerts`` is the structured list; ``notification`` stays what it always was,
+    one Russian sentence or null, for clients that only know that field."""
+    try:
+        top = budget_alerts.most_severe(alerts)
+        return {"notification": budget_alerts.legacy_text(top) if top else None, "alerts": alerts}
+    except Exception as exc:  # the change is saved already; see _budget_alerts
+        logger.error("Budget check failed: %s", type(exc).__name__)
+        return {"notification": None, "alerts": []}
+
+
+def _sync_budget_levels(user_id, category):
+    """After a budget is created or changed its level follows the spending without an
+    alert: the user just set that limit, so what was already spent is not news."""
+    try:
+        database.evaluate_budget_alerts(user_id, [(category, month, False) for month in budget_alerts.current_month_keys()])
+    except Exception as exc:
+        logger.error("Budget check failed for user %s: %s", user_id, type(exc).__name__)
 
 
 @app.delete("/operations/{operation_id}")
 def remove_operation(operation_id: int, current_user: dict = Depends(get_current_user)):
     try:
-        database.delete_operation(operation_id, current_user["id"])
+        previous = database.delete_operation(operation_id, current_user["id"])
     except database.OperationNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    if previous:
+        # Less spending can only lower a level, so this only keeps the stored one in step.
+        operation_type, category, date = previous
+        _budget_alerts(current_user["id"], _expense_changes(operation_type, category, date, notify=False))
     return {"message": "Операция удалена"}
 
 
 @app.put("/operations/{operation_id}")
 def modify_operation(operation_id: int, operation: OperationPayload, current_user: dict = Depends(get_current_user)):
+    date = checked_operation_date(operation.date)
     try:
-        database.update_operation(
-            operation_id, current_user["id"], operation.date, operation.operation_type, operation.amount, operation.category
+        previous = database.update_operation(
+            operation_id, current_user["id"], date, operation.operation_type, operation.amount, operation.category
         )
     except database.OperationNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return {"message": "Операция обновлена"}
+    # The old category and month lose the amount (silently), the new ones gain it.
+    changes = _expense_changes(operation.operation_type, operation.category, date)
+    if previous:
+        operation_type, category, previous_date = previous
+        changes += _expense_changes(operation_type, category, previous_date, notify=False)
+    alerts = _budget_alerts(current_user["id"], changes)
+    return {"message": "Операция обновлена", **_alerts_response(alerts)}
+
+
+# --- User categories ---
+# Built-in categories (database.BUILTIN_CATEGORIES) cannot be changed; the user's own are
+# stored in user_categories. Operations and budgets keep a category as plain text, so a
+# rename or a delete updates those texts for the signed-in user only. Every query is
+# restricted to the user in the token; another user's id is simply "not found".
+@app.get("/categories")
+def list_categories(current_user: dict = Depends(get_current_user)):
+    return {"limit": database.MAX_USER_CATEGORIES, "categories": database.list_categories(current_user["id"])}
+
+
+@app.post("/categories", status_code=201)
+def create_category(payload: CategoryPayload, current_user: dict = Depends(get_current_user)):
+    try:
+        category = database.add_user_category(current_user["id"], payload.kind, payload.name)
+    except database.InvalidInput as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except database.CategoryExists as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"message": "Категория добавлена", "category": category}
+
+
+@app.put("/categories/{category_id}")
+def rename_category(category_id: int, payload: CategoryRenamePayload, current_user: dict = Depends(get_current_user)):
+    try:
+        result = database.rename_user_category(category_id, current_user["id"], payload.name)
+    except database.CategoryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except database.InvalidInput as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except database.CategoryExists as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"message": "Категория переименована", **result}
+
+
+@app.delete("/categories/{category_id}")
+def delete_category(category_id: int, move_to: Optional[str] = Query(None, max_length=100),
+                    current_user: dict = Depends(get_current_user)):
+    try:
+        result = database.delete_user_category(category_id, current_user["id"], move_to)
+    except database.CategoryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except database.InvalidInput as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except database.CategoryInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if result["kind"] == "Расход" and result["operations_moved"]:
+        # More spending in the target category: its stored budget level follows, silently.
+        _sync_budget_levels(current_user["id"], result["moved_to"])
+    return {"message": "Категория удалена", **result}
 
 
 # --- Bank CSV import ---
@@ -712,10 +871,17 @@ async def commit_csv_import(
         # The exception text may quote statement values, so only its type is logged.
         logger.error("CSV import failed for user %s: %s", current_user["id"], type(exc).__name__)
         raise HTTPException(status_code=503, detail="Не удалось сохранить импорт. Данные не изменены") from None
+    # Only rows that were really stored count; a repeated import inserts nothing.
+    changes = [
+        change for row in result.rows if row.import_hash in inserted
+        for change in _expense_changes(row.operation_type, row.category, row.date)
+    ]
+    alerts = await run_in_threadpool(_budget_alerts, current_user["id"], changes)
     return {
         **_import_summary(result),
         "imported": len(inserted),
         "duplicate_rows": len(result.rows) - len(inserted),
+        **_alerts_response(alerts),
     }
 
 
@@ -723,29 +889,29 @@ async def commit_csv_import(
 @app.get("/budgets")
 def list_budgets(current_user: dict = Depends(get_current_user)):
     budgets = database.get_budgets(current_user["id"])
-    # Calculate spending per category for current month
-    rows = _rows(current_user["id"], "month")
+    # Spending per category in the current calendar month, the same measure the alerts use.
+    month = budget_alerts.current_month_key()
     spent_map = {}
-    for row in rows:
-        if row[2] == "Расходов" or row[2] == "Расход":
-            cat = row[4]
-            if cat:
-                spent_map[cat] = spent_map.get(cat, 0.0) + float(row[3])
+    for row in database.get_operations(current_user["id"]):
+        if row[2] == "Расход" and row[4] and budget_alerts.month_key(row[1]) == month:
+            spent_map[row[4]] = spent_map.get(row[4], 0) + budget_alerts.to_decimal(row[3])
 
     result = []
     for b in budgets:
         bid, category, amount, period = b
-        spent = spent_map.get(category, 0.0)
-        amt = float(amount)
-        percent = (spent / amt * 100) if amt > 0 else 0.0
+        spent = spent_map.get(category, budget_alerts.to_decimal(0))
+        amt = budget_alerts.to_decimal(amount)
+        percent = (spent / amt * 100) if amt > 0 else 0
         result.append({
             "id": bid,
             "category": category,
-            "amount": amt,
-            "spent": spent,
-            "remaining": max(0.0, amt - spent),
-            "percent": round(percent, 1),
+            "amount": float(amt),
+            "spent": float(spent),
+            "remaining": float(max(budget_alerts.to_decimal(0), amt - spent)),
+            "percent": round(float(percent), 1),
             "period": period,
+            "month": month,
+            "level": budget_alerts.level_for(spent, amt),
             "exceeded": spent > amt
         })
     return result
@@ -757,6 +923,7 @@ def create_budget(payload: BudgetPayload, current_user: dict = Depends(get_curre
         database.add_budget(current_user["id"], payload.category, payload.amount, payload.period)
     except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    _sync_budget_levels(current_user["id"], payload.category.strip())
     return {"message": "Бюджет добавлен"}
 
 
@@ -768,6 +935,14 @@ def edit_budget(budget_id: int, payload: BudgetPayload, current_user: dict = Dep
         raise HTTPException(status_code=404, detail=str(exc))
     except database.InvalidInput as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    # The category is the stored budget's, not the one in the request body: only the amount changes.
+    try:
+        category = next((b[1] for b in database.get_budgets(current_user["id"]) if b[0] == budget_id), None)
+    except Exception as exc:
+        category = None
+        logger.error("Budget check failed for user %s: %s", current_user["id"], type(exc).__name__)
+    if category:
+        _sync_budget_levels(current_user["id"], category)
     return {"message": "Бюджет обновлен"}
 
 
@@ -864,12 +1039,22 @@ def export_csv(period: str = Query("all"), current_user: dict = Depends(get_curr
     )
 
 
+# Characters a workbook cannot store (ASCII control codes other than tab and
+# line breaks); openpyxl refuses the whole file if a cell holds one.
+EXCEL_ILLEGAL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _excel_text(value):
+    return EXCEL_ILLEGAL_CHARACTERS.sub("?", value) if isinstance(value, str) else value
+
+
 @app.get("/export/excel")
 def export_excel(period: str = Query("all"), current_user: dict = Depends(get_current_user)):
     try:
         import openpyxl
     except ImportError:
-        raise HTTPException(status_code=500, detail="openpyxl не установлен")
+        logger.error("Excel export unavailable: openpyxl is not installed")
+        raise HTTPException(status_code=503, detail="Экспорт в Excel временно недоступен")
 
     rows = _rows(current_user["id"], period)
     wb = openpyxl.Workbook()
@@ -878,7 +1063,8 @@ def export_excel(period: str = Query("all"), current_user: dict = Depends(get_cu
     ws.append(["ID", "Дата", "Тип", "Сумма", "Категория"])
     for row in rows:
         operation_id, date, operation_type, amount, category = _export_row(row)
-        ws.append([operation_id, date, operation_type, float(amount), category or ""])
+        ws.append([operation_id, _excel_text(date), operation_type, float(amount), _excel_text(category) or ""])
+        ws.cell(row=ws.max_row, column=4).number_format = "0.00"
 
     file_stream = io.BytesIO()
     wb.save(file_stream)
@@ -890,43 +1076,163 @@ def export_excel(period: str = Query("all"), current_user: dict = Depends(get_cu
     )
 
 
+# --- PDF export ---
+# The standard PDF fonts have no Cyrillic, so a TrueType font is embedded.
+# PDF_FONT_PATH (and optionally PDF_BOLD_FONT_PATH) choose it; otherwise the
+# first of these that exists and has every letter below is used.
+PDF_FONT_CANDIDATES = [
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"),
+    ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
+    ("/Library/Fonts/Arial Unicode.ttf", "/Library/Fonts/Arial Bold.ttf"),
+    ("C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\arialbd.ttf"),
+]
+PDF_REQUIRED_LETTERS = "АаБбЯяЁёӘәҒғҚқҢңӨөҰұҮүҺһІі"
+PDF_FONT, PDF_BOLD_FONT = "FinanceTrackerSans", "FinanceTrackerSans-Bold"
+_pdf_fonts = None
+_pdf_fonts_lock = threading.Lock()
+
+
+def _register_pdf_font(name, path):
+    """Registers the font under ``name`` and returns the code points it has, or
+    None if it is unreadable or lacks a Russian or Kazakh letter."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        font = TTFont(name, path)
+    except Exception:
+        return None
+    glyphs = frozenset(font.face.charToGlyph)
+    if any(ord(letter) not in glyphs for letter in PDF_REQUIRED_LETTERS):
+        return None
+    pdfmetrics.registerFont(font)
+    return glyphs
+
+
+def pdf_fonts():
+    """(regular font, bold font, code points both can draw), or None when no
+    suitable font is installed. Looked up once per process."""
+    global _pdf_fonts
+    with _pdf_fonts_lock:
+        if _pdf_fonts is None:
+            candidates = [(os.getenv("PDF_FONT_PATH"), os.getenv("PDF_BOLD_FONT_PATH"))] + PDF_FONT_CANDIDATES
+            _pdf_fonts = False
+            for regular_path, bold_path in candidates:
+                glyphs = _register_pdf_font(PDF_FONT, regular_path)
+                if glyphs is None:
+                    continue
+                bold_glyphs = _register_pdf_font(PDF_BOLD_FONT, bold_path)
+                # Without a matching bold face the headings use the regular one.
+                bold = PDF_BOLD_FONT if bold_glyphs is not None else PDF_FONT
+                _pdf_fonts = (PDF_FONT, bold, glyphs & bold_glyphs if bold_glyphs is not None else glyphs)
+                break
+        return _pdf_fonts or None
+
+
+def _pdf_text(value, glyphs):
+    """A character the font cannot draw becomes "?" rather than an invisible box."""
+    return "".join(ch if ord(ch) in glyphs else "?" for ch in str(value))
+
+
+def _pdf_wrap(text, font, size, width):
+    """Splits ``text`` into lines no wider than ``width``; a word longer than a
+    line is broken, so nothing is cut off or runs past the column."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    lines, line = [], ""
+    for word in text.split(" "):
+        candidate = f"{line} {word}" if line else word
+        if stringWidth(candidate, font, size) <= width:
+            line = candidate
+            continue
+        if line:
+            lines.append(line)
+        while stringWidth(word, font, size) > width and len(word) > 1:
+            cut = len(word) - 1
+            while cut > 1 and stringWidth(word[:cut], font, size) > width:
+                cut -= 1
+            lines.append(word[:cut])
+            word = word[cut:]
+        line = word
+    lines.append(line)
+    return lines
+
+
+# (heading, left edge, width, right-aligned) on a 612 pt wide Letter page.
+PDF_COLUMNS = [("Дата", 50, 105, False), ("Тип", 160, 60, False), ("Сумма", 225, 110, True), ("Категория", 345, 217, False)]
+PDF_MARGIN, PDF_FONT_SIZE, PDF_LEADING, PDF_ROW_GAP = 50, 10, 12, 6
+
+
 @app.get("/export/pdf")
 def export_pdf(period: str = Query("all"), current_user: dict = Depends(get_current_user)):
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
-        from reportlab.lib import colors
     except ImportError:
-        raise HTTPException(status_code=500, detail="reportlab не установлен")
+        logger.error("PDF export unavailable: reportlab is not installed")
+        raise HTTPException(status_code=503, detail="Экспорт в PDF временно недоступен")
+    fonts = pdf_fonts()
+    if fonts is None:
+        logger.error("PDF export unavailable: no font with Russian and Kazakh letters; set PDF_FONT_PATH")
+        raise HTTPException(status_code=503, detail="Экспорт в PDF временно недоступен")
+    font, bold, glyphs = fonts
+    currency = "₸" if ord("₸") in glyphs else "KZT"
 
     rows = _rows(current_user["id"], period)
     buffer = io.BytesIO()
-    p = canvas.Canvas(buffer, pagesize=letter)
+    p = canvas.Canvas(buffer, pagesize=letter, initialFontName=font)
     width, height = letter
+    text_width = width - 2 * PDF_MARGIN
 
-    p.setFont("Helvetica-Bold", 16)
-    p.drawString(50, height - 50, f"Finance Tracker - Отчет ({period})")
-    p.setFont("Helvetica", 10)
-    p.drawString(50, height - 70, f"Пользователь: {current_user['email']} | Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    def table_header(y):
+        p.setFont(bold, PDF_FONT_SIZE)
+        for heading, x, column_width, right in PDF_COLUMNS:
+            if right:
+                p.drawRightString(x + column_width, y, heading)
+            else:
+                p.drawString(x, y, heading)
+        p.line(PDF_MARGIN, y - 4, width - PDF_MARGIN, y - 4)
+        p.setFont(font, PDF_FONT_SIZE)
+        return y - PDF_LEADING - PDF_ROW_GAP
 
-    y = height - 100
-    p.setFont("Helvetica-Bold", 10)
-    p.drawString(50, y, "Дата")
-    p.drawString(150, y, "Тип")
-    p.drawString(230, y, "Сумма")
-    p.drawString(330, y, "Категория")
-    y -= 20
-    p.setFont("Helvetica", 10)
+    y = height - PDF_MARGIN
+    p.setFont(bold, 16)
+    for line in _pdf_wrap(_pdf_text(f"Finance Tracker - Отчет ({period})", glyphs), bold, 16, text_width):
+        p.drawString(PDF_MARGIN, y, line)
+        y -= 20
+    p.setFont(font, PDF_FONT_SIZE)
+    details = f"Пользователь: {current_user['email']} | Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+    for line in _pdf_wrap(_pdf_text(details, glyphs), font, PDF_FONT_SIZE, text_width):
+        p.drawString(PDF_MARGIN, y, line)
+        y -= PDF_LEADING
+    y = table_header(y - PDF_LEADING)
 
+    if not rows:
+        p.drawString(PDF_MARGIN, y, "Нет операций за выбранный период")
     for row in rows:
-        if y < 50:
+        cells = [row[1], row[2], f"{row[3]} {currency}", row[4] or "-"]
+        lines = [
+            _pdf_wrap(_pdf_text(value, glyphs), font, PDF_FONT_SIZE, column_width)
+            for value, (_, _, column_width, _) in zip(cells, PDF_COLUMNS)
+        ]
+        row_height = max(len(cell) for cell in lines) * PDF_LEADING
+        if y - row_height + PDF_LEADING < PDF_MARGIN:
+            # A row never splits across pages, and every page repeats the header.
             p.showPage()
-            y = height - 50
-        p.drawString(50, y, str(row[1]))
-        p.drawString(150, y, str(row[2]))
-        p.drawString(230, y, f"{row[3]} ₸")
-        p.drawString(330, y, str(row[4] or "-"))
-        y -= 18
+            y = table_header(height - PDF_MARGIN)
+        for cell, (_, x, column_width, right) in zip(lines, PDF_COLUMNS):
+            for index, line in enumerate(cell):
+                line_y = y - index * PDF_LEADING
+                if right:
+                    p.drawRightString(x + column_width, line_y, line)
+                else:
+                    p.drawString(x, line_y, line)
+        y -= row_height + PDF_ROW_GAP
 
     p.save()
     buffer.seek(0)

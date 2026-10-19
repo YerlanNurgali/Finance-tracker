@@ -1,10 +1,18 @@
 import unittest
+from datetime import datetime, timedelta
 from decimal import Decimal
 import os
 import auth
+import budget_alerts
 import database
 
-os.environ["TESTING"] = "true"
+try:
+    import api
+except ImportError:  # fastapi and its dependencies are not installed
+    api = None
+
+# TESTING is set per test by the autouse fixture in tests/conftest.py, which also
+# undoes the database.get_connection change made in setUp.
 
 
 class MockCursor:
@@ -36,11 +44,12 @@ class MockCursor:
                     self.result = [u]
                     return
             self.result = []
-        elif "SELECT LANGUAGE, THEME, CURRENCY FROM USER_SETTINGS" in q:
+        elif "SELECT LANGUAGE, THEME, CURRENCY" in q and "FROM USER_SETTINGS" in q:
             uid = params[0]
             if uid in self.store["settings"]:
                 s = self.store["settings"][uid]
-                self.result = [[s["language"], s["theme"], s["currency"]]]
+                self.result = [[s["language"], s["theme"], s["currency"],
+                                s.get("budget_alerts_inapp", True), s.get("budget_alerts_push", True)]]
             else:
                 self.result = []
         elif "UPDATE USER_SETTINGS" in q:
@@ -134,6 +143,67 @@ class TestUserSettingsAndSecurity(unittest.TestCase):
     def test_account_deletion_flow(self):
         database.delete_user_account(self.user_id)
         self.assertEqual(len(self.store["users"]), 0)
+
+
+@unittest.skipIf(api is None, "fastapi is not installed")
+class TestOperationDateText(unittest.TestCase):
+    """api.checked_operation_date: what a new or edited operation may carry as its date.
+    The clock is passed in, so none of these depends on today's date."""
+
+    NOW = datetime(2026, 10, 18, 12, 0, 0)
+    STORED = "%d.%m.%Y, %H:%M:%S"
+
+    def check(self, value, now=None):
+        return api.checked_operation_date(value, now or self.NOW)
+
+    def refused(self, value, message, now=None):
+        with self.assertRaises(api.HTTPException) as raised:
+            self.check(value, now)
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(raised.exception.detail, message)
+
+    def test_the_format_of_the_frontend_and_the_import_is_kept_as_sent(self):
+        self.assertEqual(self.check("18.10.2026, 09:05:30"), "18.10.2026, 09:05:30")
+
+    def test_every_format_the_budgets_read_is_accepted_and_stored_unchanged(self):
+        for date_format in budget_alerts.DATE_FORMATS:
+            self.assertIn(date_format, api.OPERATION_DATE_FORMATS)
+        for value in ("16.10.2026 10:00", "16.10.2026, 10:00", "16.10.2026, 10:00:00", "2026-10-16T10:00", "2026-10-16"):
+            with self.subTest(value=value):
+                self.assertEqual(self.check(value), value)
+                self.assertEqual(budget_alerts.month_key(self.check(value)), "2026-10")
+
+    def test_a_date_without_a_time_becomes_midnight_so_the_budgets_can_read_it(self):
+        self.assertIsNone(budget_alerts.month_key("16.10.2026"))
+        stored = self.check("16.10.2026")
+        self.assertEqual(stored, "16.10.2026, 00:00:00")
+        self.assertEqual(budget_alerts.month_key(stored), "2026-10")
+
+    def test_surrounding_spaces_are_trimmed_and_nothing_else_changes(self):
+        self.assertEqual(self.check("  16.10.2026, 10:00  "), "16.10.2026, 10:00")
+
+    def test_an_unreadable_date_is_refused_and_never_replaced_by_the_current_one(self):
+        for value in ("", "   ", "not a date", "31.02.2026, 10:00:00", "16.10.2026, 24:00:00",
+                      "16.10.2026, 10:60:00", "2026-13-01", "16/10/2026", "2026-10-16 10:00", None, 20261016):
+            with self.subTest(value=value):
+                self.refused(value, api.DATE_INVALID)
+
+    def test_the_earliest_date_is_the_first_moment_of_2000(self):
+        self.assertEqual(self.check("01.01.2000, 00:00:00"), "01.01.2000, 00:00:00")
+        self.refused("31.12.1999, 23:59:59", api.DATE_TOO_OLD)
+        self.refused("01.01.0001, 00:00:00", api.DATE_TOO_OLD)
+
+    def test_the_latest_date_is_31_days_after_the_servers_clock(self):
+        latest = self.NOW + timedelta(days=31)
+        self.assertEqual(self.check(latest.strftime(self.STORED)), latest.strftime(self.STORED))
+        self.refused((latest + timedelta(minutes=1)).strftime(self.STORED), api.DATE_TOO_FAR)
+        self.refused("18.10.2027, 12:00:00", api.DATE_TOO_FAR)
+
+    def test_the_messages_name_the_limits_they_enforce(self):
+        self.assertEqual(api.MIN_OPERATION_DATE, datetime(2000, 1, 1))
+        self.assertEqual(api.MAX_OPERATION_DATE_AHEAD, timedelta(days=31))
+        self.assertIn("01.01.2000", api.DATE_TOO_OLD)
+        self.assertIn("31", api.DATE_TOO_FAR)
 
 
 if __name__ == "__main__":

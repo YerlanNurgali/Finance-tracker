@@ -35,6 +35,7 @@ class Cursor:
                     self.store[i] = (row[0], row[1], params[0], params[1], Decimal(str(params[2])), params[3])
                     self.rowcount = 1
     def fetchall(self): return self.result
+    def fetchone(self): return self.result[0] if self.result else None
 
 
 class Connection:

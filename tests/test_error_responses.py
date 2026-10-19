@@ -36,6 +36,7 @@ def signed_in(client, monkeypatch):
     monkeypatch.setattr(database, "get_budgets", lambda user_id: [])
     monkeypatch.setattr(database, "get_operations", lambda user_id: [])
     monkeypatch.setattr(database, "get_user_settings", lambda user_id: {"currency": "KZT"})
+    monkeypatch.setattr(database, "evaluate_budget_alerts", lambda user_id, targets: [])
     return client
 
 
@@ -135,31 +136,34 @@ def test_the_data_layer_reports_bad_input_as_invalid_input():
     assert issubclass(database.InvalidInput, ValueError), "existing ValueError handlers keep working"
 
 
-@pytest.mark.parametrize("get_budgets", [
+@pytest.mark.parametrize("evaluate", [
     raising(RuntimeError(SECRET)),
-    lambda user_id: [(1, "Еда", "not-a-number", "month")],
-], ids=["database", "bad-row"])
-def test_a_failing_budget_check_still_reports_the_saved_operation(signed_in, monkeypatch, caplog, get_budgets):
+    raising(ValueError("DATABASE_URL не настроен")),
+    lambda user_id, targets: [{"category": "Еда"}],   # a malformed alert from the data layer
+], ids=["driver", "config", "bad-alert"])
+def test_a_failing_budget_check_still_reports_the_saved_operation(signed_in, monkeypatch, caplog, evaluate):
     # An error here would make the user save the same operation again.
     saved = []
     monkeypatch.setattr(database, "add_operation", lambda *args: saved.append(args))
-    monkeypatch.setattr(database, "get_budgets", get_budgets)
+    monkeypatch.setattr(database, "evaluate_budget_alerts", evaluate)
     response = signed_in.post("/operations", json=OPERATION)
     assert len(saved) == 1
     assert response.status_code == 201
-    assert response.json() == {"message": "Операция добавлена", "notification": None}
+    assert response.json() == {"message": "Операция добавлена", "notification": None, "alerts": []}
     assert "Budget check failed" in caplog.text
     for marker in LEAK_MARKERS + ("not-a-number", "could not convert"):
         assert marker not in response.text and marker not in caplog.text
 
 
-def test_an_exceeded_budget_still_warns(signed_in, monkeypatch):
+def test_an_exceeded_budget_still_warns_in_the_notification_field(signed_in, monkeypatch):
     monkeypatch.setattr(database, "add_operation", lambda *args: None)
-    monkeypatch.setattr(database, "get_budgets", lambda user_id: [(1, "Еда", 5, "month")])
-    monkeypatch.setattr(api, "_rows", lambda user_id, period: [(1, "01.10.2026", "Расход", 10, "Еда")])
+    alert = {"budget_id": 1, "category": "Еда", "month": "2026-10", "level": "exceeded",
+             "percent": 200.0, "spent": 10.0, "amount": 5.0}
+    monkeypatch.setattr(database, "evaluate_budget_alerts", lambda user_id, targets: [alert])
     response = signed_in.post("/operations", json=OPERATION)
     assert response.status_code == 201
     assert response.json()["notification"] == "⚠️ Бюджет на Еда превышен!"
+    assert response.json()["alerts"] == [alert]
 
 
 # --- Input PostgreSQL cannot store is rejected before reaching it ------------------

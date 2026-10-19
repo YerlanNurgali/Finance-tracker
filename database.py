@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 from decimal import ROUND_HALF_UP, Decimal
 
@@ -16,6 +17,8 @@ try:
 except ImportError:
     def load_dotenv():
         return False
+
+import budget_alerts
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -72,6 +75,18 @@ class BudgetNotFound(LookupError):
 
 class GoalNotFound(LookupError):
     pass
+
+
+class CategoryNotFound(LookupError):
+    pass
+
+
+class CategoryExists(Exception):
+    """The user already has a category of that kind with that name (any letter case)."""
+
+
+class CategoryInUse(Exception):
+    """The category cannot be deleted while a budget is assigned to it."""
 
 
 def _env_positive_int(name, default):
@@ -347,6 +362,41 @@ def create_database():
                 )
             """)
 
+            # 5b. Budget alert switches. Both are on for everyone, existing users
+            # included; ADD COLUMN ... IF NOT EXISTS makes the migration repeatable.
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS budget_alerts_inapp BOOLEAN NOT NULL DEFAULT TRUE")
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS budget_alerts_push BOOLEAN NOT NULL DEFAULT TRUE")
+
+            # 5c. The highest alert level already reported for a budget in a calendar
+            # month ('YYYY-MM'). It is what keeps one crossing from being reported twice.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS budget_alert_state (
+                    budget_id BIGINT NOT NULL REFERENCES budgets(id) ON DELETE CASCADE,
+                    month TEXT NOT NULL,
+                    level SMALLINT NOT NULL DEFAULT 0 CHECK (level BETWEEN 0 AND 3),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (budget_id, month)
+                )
+            """)
+
+            # 5d. Categories a user made for themselves (the built-in ones are in the code,
+            # BUILTIN_CATEGORIES). Operations and budgets keep the category as plain text, so
+            # nothing references this table; it only records which names the user manages.
+            # The unique index is a backstop: add/rename also compare names in Python (case
+            # folding that does not depend on the database's locale) under a lock on the user's row.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_categories (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL CHECK (kind IN ('Доход', 'Расход')),
+                    name TEXT NOT NULL
+                )
+            """)
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_user_categories_user_kind_name "
+                "ON user_categories (user_id, kind, lower(name))"
+            )
+
             # 6. Performance indexes — created IF NOT EXISTS, safe to re-run
             cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_operations_user_id ON {TABLE_NAME} (user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_budgets_user_id ON budgets (user_id)")
@@ -411,19 +461,23 @@ def get_user_settings(user_id: int):
     try:
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT language, theme, currency FROM user_settings WHERE user_id = %s",
+                "SELECT language, theme, currency, budget_alerts_inapp, budget_alerts_push "
+                "FROM user_settings WHERE user_id = %s",
                 (user_id,)
             )
             row = cursor.fetchone()
             if not row:
                 # Fallback default if not present
-                return {"language": "RU", "theme": "light", "currency": "KZT"}
-            return {"language": row[0], "theme": row[1], "currency": row[2]}
+                return {"language": "RU", "theme": "light", "currency": "KZT",
+                        "budget_alerts_inapp": True, "budget_alerts_push": True}
+            return {"language": row[0], "theme": row[1], "currency": row[2],
+                    "budget_alerts_inapp": bool(row[3]), "budget_alerts_push": bool(row[4])}
     finally:
         connection.close()
 
 
-def update_user_settings(user_id: int, language: str = None, theme: str = None, currency: str = None):
+def update_user_settings(user_id: int, language: str = None, theme: str = None, currency: str = None,
+                         budget_alerts_inapp: bool = None, budget_alerts_push: bool = None):
     with _transaction() as connection:
         with connection.cursor() as cursor:
             # Ensure settings exist
@@ -440,6 +494,12 @@ def update_user_settings(user_id: int, language: str = None, theme: str = None, 
             if currency is not None:
                 updates.append("currency = %s")
                 params.append(currency)
+            if budget_alerts_inapp is not None:
+                updates.append("budget_alerts_inapp = %s")
+                params.append(bool(budget_alerts_inapp))
+            if budget_alerts_push is not None:
+                updates.append("budget_alerts_push = %s")
+                params.append(bool(budget_alerts_push))
 
             if updates:
                 params.append(user_id)
@@ -490,20 +550,30 @@ def get_operations(user_id: int):
 
 
 def delete_operation(operation_id: int, user_id: int):
+    """Deletes the operation and returns what it was, as (type, category, date), so
+    the budgets it counted against can be recalculated."""
     with _transaction() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                f"DELETE FROM {TABLE_NAME} WHERE id = %s AND user_id = %s",
+                f"DELETE FROM {TABLE_NAME} WHERE id = %s AND user_id = %s RETURNING operation_type, category, date",
                 (operation_id, user_id)
             )
             if cursor.rowcount == 0:
                 raise OperationNotFound("Операция не найдена")
+            return cursor.fetchone()
 
 
 def update_operation(operation_id: int, user_id: int, date, operation_type, amount, category=None):
+    """Updates the operation and returns what it was before, as (type, category, date):
+    the old category and month lose the amount, the new ones gain it."""
     amount, category = _validate_operation(operation_type, amount, category)
     with _transaction() as connection:
         with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT operation_type, category, date FROM {TABLE_NAME} WHERE id = %s AND user_id = %s FOR UPDATE",
+                (operation_id, user_id),
+            )
+            previous = cursor.fetchone()
             cursor.execute(
                 f"""UPDATE {TABLE_NAME}
                     SET date = %s, operation_type = %s, amount = %s, category = %s
@@ -512,6 +582,7 @@ def update_operation(operation_id: int, user_id: int, date, operation_type, amou
             )
             if cursor.rowcount == 0:
                 raise OperationNotFound("Операция не найдена")
+            return previous
 
 
 # CSV import
@@ -610,6 +681,67 @@ def update_budget(budget_id: int, user_id: int, amount):
                 raise BudgetNotFound("Бюджет не найден")
 
 
+def evaluate_budget_alerts(user_id: int, targets):
+    """Recalculates the alert level of the user's budgets and returns the alerts to send.
+
+    ``targets`` is an iterable of (category, month, notify): the budgets of that
+    category are measured against the spending of that calendar month ('YYYY-MM').
+    The level reached so far is kept per budget and month. A higher level is an
+    alert (when ``notify``), a lower or equal one is not; the stored level always
+    follows the spending, so crossing a threshold again later alerts again.
+
+    The state row is locked before the spending is read, so two requests for the same
+    budget run one after the other and a crossing is reported exactly once.
+    """
+    wanted = {}
+    for category, month, notify in targets:
+        if category and month:
+            wanted[(category, month)] = wanted.get((category, month), False) or bool(notify)
+    if not wanted:
+        return []
+
+    alerts = []
+    with _transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, category, amount FROM budgets WHERE user_id = %s AND category = ANY(%s) ORDER BY id",
+                (user_id, sorted({category for category, _ in wanted})),
+            )
+            budgets = cursor.fetchall()
+            # One global lock order (budget, month) keeps concurrent requests from deadlocking.
+            work = sorted(
+                ((budget_id, category, amount, month, notify)
+                 for budget_id, category, amount in budgets
+                 for (wanted_category, month), notify in wanted.items() if wanted_category == category),
+                key=lambda item: (item[0], item[3]),
+            )
+            for budget_id, category, amount, month, notify in work:
+                cursor.execute(
+                    "INSERT INTO budget_alert_state (budget_id, month) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (budget_id, month),
+                )
+                cursor.execute(
+                    "SELECT level FROM budget_alert_state WHERE budget_id = %s AND month = %s FOR UPDATE",
+                    (budget_id, month),
+                )
+                previous = cursor.fetchone()[0]
+                cursor.execute(
+                    f"SELECT date, amount FROM {TABLE_NAME} WHERE user_id = %s AND category = %s AND operation_type = %s",
+                    (user_id, category, "Расход"),
+                )
+                spent = budget_alerts.month_spent(cursor.fetchall(), month)
+                level = budget_alerts.level_for(spent, amount)
+                if level != previous:
+                    cursor.execute(
+                        "UPDATE budget_alert_state SET level = %s, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE budget_id = %s AND month = %s",
+                        (level, budget_id, month),
+                    )
+                if notify and level > previous:
+                    alerts.append(budget_alerts.make_alert(budget_id, category, month, level, spent, amount))
+    return alerts
+
+
 def delete_budget(budget_id: int, user_id: int):
     with _transaction() as connection:
         with connection.cursor() as cursor:
@@ -676,3 +808,253 @@ def delete_goal(goal_id: int, user_id: int):
             )
             if cursor.rowcount == 0:
                 raise GoalNotFound("Цель не найдена")
+
+
+# User categories
+# The built-in categories, per operation type. The frontend shows the same ones (its lists
+# are in frontend/script.js); here they are needed to refuse user categories that would
+# take their names and to choose where deleted categories' operations go.
+BUILTIN_CATEGORIES = {
+    "Доход": ("Зарплата", "Фриланс", "Бизнес", "Инвестиции", "Другое"),
+    "Расход": ("Еда", "Транспорт", "Дом", "Развлечения", "Здоровье", "Другое"),
+}
+# The same names in English and Kazakh as frontend/i18n.js shows them. A user category may
+# not take any of the three names of a built-in one.
+_BUILTIN_CATEGORY_TRANSLATIONS = {
+    "Зарплата": ("Salary", "Жалақы"),
+    "Фриланс": ("Freelance",),
+    "Бизнес": ("Business",),
+    "Инвестиции": ("Investments", "Инвестициялар"),
+    "Еда": ("Food", "Тамақ"),
+    "Транспорт": ("Transport", "Көлік"),
+    "Дом": ("Home", "Үй"),
+    "Развлечения": ("Entertainment", "Ойын-сауық"),
+    "Здоровье": ("Health", "Денсаулық"),
+    "Другое": ("Other", "Басқа"),
+}
+DEFAULT_MOVE_CATEGORY = "Другое"
+MAX_USER_CATEGORIES = 50
+MAX_CATEGORY_NAME_LENGTH = 50
+_MAX_ID = 2 ** 63 - 1  # BIGINT
+
+CATEGORY_NAME_LENGTH_MESSAGE = f"Название категории должно содержать от 1 до {MAX_CATEGORY_NAME_LENGTH} символов"
+CATEGORY_NAME_CHARACTERS_MESSAGE = "Название категории содержит недопустимые символы"
+CATEGORY_NAME_BUILTIN_MESSAGE = "Название совпадает со встроенной категорией"
+CATEGORY_KIND_MESSAGE = "Недопустимый тип категории"
+CATEGORY_LIMIT_MESSAGE = f"Достигнут лимит пользовательских категорий ({MAX_USER_CATEGORIES})"
+CATEGORY_EXISTS_MESSAGE = "Категория с таким названием уже существует"
+CATEGORY_NOT_FOUND_MESSAGE = "Категория не найдена"
+CATEGORY_MOVE_NOT_FOUND_MESSAGE = "Категория для переноса не найдена"
+CATEGORY_MOVE_SAME_MESSAGE = "Нельзя перенести операции в удаляемую категорию"
+CATEGORY_IN_USE_MESSAGE = "На категорию назначен бюджет: удалите или измените бюджет и повторите"
+
+
+def _fold(text):
+    return text.casefold()
+
+
+def _builtin_names_folded():
+    """folded name in any language -> the built-in category's name (Russian)."""
+    names = {}
+    for kind_names in BUILTIN_CATEGORIES.values():
+        for name in kind_names:
+            for variant in (name, *_BUILTIN_CATEGORY_TRANSLATIONS.get(name, ())):
+                names[_fold(variant)] = name
+    return names
+
+
+def _clean_category_name(name):
+    """The name as it is stored, or InvalidInput: trimmed, 1-50 characters, no control
+    characters (NUL included), not the name of a built-in category in any language."""
+    if not isinstance(name, str):
+        raise InvalidInput("Название категории должно быть текстом")
+    name = unicodedata.normalize("NFC", name).strip()
+    if not 1 <= len(name) <= MAX_CATEGORY_NAME_LENGTH:
+        raise InvalidInput(CATEGORY_NAME_LENGTH_MESSAGE)
+    if any(unicodedata.category(char) in ("Cc", "Cs") for char in name):
+        raise InvalidInput(CATEGORY_NAME_CHARACTERS_MESSAGE)
+    if _fold(name) in _builtin_names_folded():
+        raise InvalidInput(CATEGORY_NAME_BUILTIN_MESSAGE)
+    return name
+
+
+def _check_category_kind(kind):
+    if kind not in BUILTIN_CATEGORIES:
+        raise InvalidInput(CATEGORY_KIND_MESSAGE)
+
+
+def _category_id(category_id):
+    """An id that can exist, or CategoryNotFound (a number the BIGINT column cannot hold
+    would otherwise be a database error)."""
+    if isinstance(category_id, bool) or not isinstance(category_id, int) or not 1 <= category_id <= _MAX_ID:
+        raise CategoryNotFound(CATEGORY_NOT_FOUND_MESSAGE)
+    return category_id
+
+
+def _name_taken(rows, kind, name, skip_id=None):
+    return any(row[1] == kind and row[0] != skip_id and _fold(row[2]) == _fold(name) for row in rows)
+
+
+def _lock_user(cursor, user_id):
+    """Serialises everything that changes one user's categories, so the limit and the
+    duplicate check cannot be passed by two requests at once."""
+    cursor.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,))
+    if cursor.fetchone() is None:
+        raise UserNotFound("Пользователь не найден")
+
+
+def category_items(custom_rows):
+    """The built-in categories followed by the user's own ((id, kind, name) rows), as dicts."""
+    items = [{"id": None, "kind": kind, "name": name, "builtin": True}
+             for kind, names in BUILTIN_CATEGORIES.items() for name in names]
+    items += [{"id": row[0], "kind": row[1], "name": row[2], "builtin": False} for row in custom_rows]
+    return items
+
+
+def get_user_categories(user_id: int):
+    connection = get_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, kind, name FROM user_categories WHERE user_id = %s ORDER BY id",
+                (user_id,)
+            )
+            return cursor.fetchall()
+    finally:
+        connection.close()
+
+
+def list_categories(user_id: int):
+    return category_items(get_user_categories(user_id))
+
+
+def add_user_category(user_id: int, kind, name):
+    _check_category_kind(kind)
+    name = _clean_category_name(name)
+    with _transaction() as connection:
+        with connection.cursor() as cursor:
+            _lock_user(cursor, user_id)
+            cursor.execute(
+                "SELECT id, kind, name FROM user_categories WHERE user_id = %s ORDER BY id",
+                (user_id,)
+            )
+            rows = cursor.fetchall()
+            if _name_taken(rows, kind, name):
+                raise CategoryExists(CATEGORY_EXISTS_MESSAGE)
+            if len(rows) >= MAX_USER_CATEGORIES:
+                raise InvalidInput(CATEGORY_LIMIT_MESSAGE)
+            try:
+                cursor.execute(
+                    "INSERT INTO user_categories (user_id, kind, name) VALUES (%s, %s, %s) RETURNING id",
+                    (user_id, kind, name)
+                )
+            except Exception as exc:
+                if "unique constraint" in str(exc).lower() or "duplicate key" in str(exc).lower():
+                    raise CategoryExists(CATEGORY_EXISTS_MESSAGE) from exc
+                raise
+            category_id = cursor.fetchone()[0]
+    return {"id": category_id, "kind": kind, "name": name, "builtin": False}
+
+
+def rename_user_category(category_id: int, user_id: int, new_name):
+    """Renames the user's category and, in the same transaction, the category text of the
+    user's operations of that kind (and, for expense categories, of the user's budgets).
+    Returns the category and how many operations and budgets were updated."""
+    new_name = _clean_category_name(new_name)
+    category_id = _category_id(category_id)
+    operations = budgets = 0
+    with _transaction() as connection:
+        with connection.cursor() as cursor:
+            _lock_user(cursor, user_id)
+            cursor.execute(
+                "SELECT id, kind, name FROM user_categories WHERE id = %s AND user_id = %s FOR UPDATE",
+                (category_id, user_id)
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise CategoryNotFound(CATEGORY_NOT_FOUND_MESSAGE)
+            kind, old_name = current[1], current[2]
+            cursor.execute(
+                "SELECT id, kind, name FROM user_categories WHERE user_id = %s ORDER BY id",
+                (user_id,)
+            )
+            if _name_taken(cursor.fetchall(), kind, new_name, skip_id=category_id):
+                raise CategoryExists(CATEGORY_EXISTS_MESSAGE)
+            if new_name != old_name:
+                cursor.execute(
+                    "UPDATE user_categories SET name = %s WHERE id = %s AND user_id = %s",
+                    (new_name, category_id, user_id)
+                )
+                cursor.execute(
+                    f"UPDATE {TABLE_NAME} SET category = %s WHERE user_id = %s AND operation_type = %s AND category = %s",
+                    (new_name, user_id, kind, old_name)
+                )
+                operations = cursor.rowcount
+                if kind == "Расход":
+                    cursor.execute(
+                        "UPDATE budgets SET category = %s WHERE user_id = %s AND category = %s",
+                        (new_name, user_id, old_name)
+                    )
+                    budgets = cursor.rowcount
+    return {"category": {"id": category_id, "kind": kind, "name": new_name, "builtin": False},
+            "operations_updated": operations, "budgets_updated": budgets}
+
+
+def _move_target(kind, current_name, move_to, rows):
+    """The category (as stored) the operations of a deleted category go to: ``move_to``
+    resolved case-insensitively to a built-in category of that kind (any of its three
+    names) or another category of the user's of that kind; "Другое" when not given."""
+    if move_to is None or (isinstance(move_to, str) and not move_to.strip()):
+        return DEFAULT_MOVE_CATEGORY
+    if not isinstance(move_to, str):
+        raise InvalidInput(CATEGORY_MOVE_NOT_FOUND_MESSAGE)
+    wanted = _fold(unicodedata.normalize("NFC", move_to).strip())
+    if wanted == _fold(current_name):
+        raise InvalidInput(CATEGORY_MOVE_SAME_MESSAGE)
+    for name in BUILTIN_CATEGORIES[kind]:
+        if wanted in {_fold(variant) for variant in (name, *_BUILTIN_CATEGORY_TRANSLATIONS.get(name, ()))}:
+            return name
+    for row in rows:
+        if row[1] == kind and _fold(row[2]) == wanted:
+            return row[2]
+    raise InvalidInput(CATEGORY_MOVE_NOT_FOUND_MESSAGE)
+
+
+def delete_user_category(category_id: int, user_id: int, move_to=None):
+    """Deletes the user's category after moving the user's operations of that kind from it to
+    ``move_to`` ("Другое" by default), in one transaction; the history keeps every operation.
+    An expense category with a budget is not deleted (CategoryInUse)."""
+    category_id = _category_id(category_id)
+    with _transaction() as connection:
+        with connection.cursor() as cursor:
+            _lock_user(cursor, user_id)
+            cursor.execute(
+                "SELECT id, kind, name FROM user_categories WHERE id = %s AND user_id = %s FOR UPDATE",
+                (category_id, user_id)
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise CategoryNotFound(CATEGORY_NOT_FOUND_MESSAGE)
+            kind, name = current[1], current[2]
+            cursor.execute(
+                "SELECT id, kind, name FROM user_categories WHERE user_id = %s ORDER BY id",
+                (user_id,)
+            )
+            target = _move_target(kind, name, move_to, cursor.fetchall())
+            if kind == "Расход":
+                cursor.execute(
+                    "SELECT COUNT(*) FROM budgets WHERE user_id = %s AND category = %s",
+                    (user_id, name)
+                )
+                if cursor.fetchone()[0]:
+                    raise CategoryInUse(CATEGORY_IN_USE_MESSAGE)
+            cursor.execute(
+                f"UPDATE {TABLE_NAME} SET category = %s WHERE user_id = %s AND operation_type = %s AND category = %s",
+                (target, user_id, kind, name)
+            )
+            moved = cursor.rowcount
+            cursor.execute(
+                "DELETE FROM user_categories WHERE id = %s AND user_id = %s",
+                (category_id, user_id)
+            )
+    return {"kind": kind, "name": name, "moved_to": target, "operations_moved": moved}

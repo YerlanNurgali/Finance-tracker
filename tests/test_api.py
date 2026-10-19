@@ -62,9 +62,16 @@ def test_api_payload_validation_and_create(monkeypatch):
     calls = []
     monkeypatch.setattr(database, "add_operation", lambda *args: calls.append(args))
     monkeypatch.setattr(database, "get_budgets", lambda user_id: [])
-    payload = api.OperationPayload(date="date", operation_type="Доход", amount=5, category="Зарплата")
+    # An unreadable date is refused before anything is stored.
+    unreadable = api.OperationPayload(date="date", operation_type="Доход", amount=5, category="Зарплата")
+    with pytest.raises(HTTPException) as date_error:
+        api.create_operation(unreadable, USER)
+    assert date_error.value.status_code == 422
+    assert calls == []
+
+    payload = api.OperationPayload(date="30.09.2026 10:00", operation_type="Доход", amount=5, category="Зарплата")
     assert api.create_operation(payload, USER)["message"] == "Операция добавлена"
-    assert calls == [(1, "date", "Доход", 5.0, "Зарплата")]
+    assert calls == [(1, "30.09.2026 10:00", "Доход", 5.0, "Зарплата")]
 
 
 def test_api_delete_and_update_not_found(monkeypatch):
@@ -78,7 +85,13 @@ def test_api_delete_and_update_not_found(monkeypatch):
         api.remove_operation(99, USER)
     assert delete_error.value.status_code == 404
 
-    payload = api.OperationPayload(date="date", operation_type="Расход", amount=1, category="Еда")
+    # The date is checked first: an unreadable one is a 422, not a 404.
+    unreadable = api.OperationPayload(date="date", operation_type="Расход", amount=1, category="Еда")
+    with pytest.raises(HTTPException) as date_error:
+        api.modify_operation(99, unreadable, USER)
+    assert date_error.value.status_code == 422
+
+    payload = api.OperationPayload(date="30.09.2026 10:00", operation_type="Расход", amount=1, category="Еда")
     with pytest.raises(HTTPException) as update_error:
         api.modify_operation(99, payload, USER)
     assert update_error.value.status_code == 404
