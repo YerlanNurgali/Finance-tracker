@@ -2,6 +2,8 @@
 main_backup.py
 operations.txt
 .venv/
+.venv_new/
+api.py.save
 finance_tracker.db
 *.db
 .env
