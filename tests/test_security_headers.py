@@ -184,7 +184,8 @@ def _docs_statuses(env):
     )
     # An allow-listed environment (no RENDER, API_DOCS, PG* or secrets unless given here),
     # the dummy DATABASE_URL, .env switched off and a sitecustomize that refuses every connection.
-    base = safe_subprocess_env(dict(env, SECRET_KEY="tests"))
+    # A dummy key of the length production requires (at least 32 characters), so the app starts.
+    base = safe_subprocess_env(dict(env, SECRET_KEY="tests-" * 8))
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, env=base, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout.strip().splitlines()[-1])

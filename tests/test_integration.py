@@ -159,6 +159,15 @@ class _Cursor:
             self.rowcount = 1
             return
 
+        if "UPDATE USERS SET TOKEN_VERSION" in q:
+            uid = params[0]
+            self.store["users"] = [
+                (u[0], u[1], u[2], u[3], u[4] + 1) if u[0] == uid else u
+                for u in self.store["users"]
+            ]
+            self.rowcount = 1
+            return
+
         if "DELETE FROM USERS" in q:
             uid = params[0]
             before = len(self.store["users"])
@@ -592,6 +601,112 @@ class TestHttpTokenVersion(_HttpBase):
                         headers=old_h)
         new_token = self._login(password="NewPwd456!").json()["access_token"]
         self.assertEqual(self.client.get("/auth/me", headers=self._headers(new_token)).status_code, 200)
+
+
+@unittest.skipUnless(FASTAPI_AVAILABLE, _SKIP_HTTP)
+class TestHttpLogoutAndLimits(_HttpBase):
+    """POST /auth/logout ends every session of the account. Password change and account deletion
+    are limited per account, and login is also limited per account, whatever address it comes from."""
+
+    def setUp(self):
+        super().setUp()
+        import api as app_module
+        self.addCleanup(app_module.limiter.reset)
+
+    def _change_password(self, token, current="Secret123!"):
+        return self.client.put("/auth/password",
+                               json={"current_password": current, "new_password": "NewPwd456!"},
+                               headers=self._headers(token))
+
+    def _delete(self, token, password):
+        return self.client.request("DELETE", "/auth/delete", json={"password": password},
+                                   headers=self._headers(token))
+
+    def test_logout_ends_every_session_of_the_account(self):
+        first = self._register().json()["access_token"]
+        second = self._login().json()["access_token"]
+        r = self.client.post("/auth/logout", headers=self._headers(first))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(first)).status_code, 401)
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(second)).status_code, 401)
+
+    def test_login_after_logout_gives_a_working_session(self):
+        token = self._register().json()["access_token"]
+        self.client.post("/auth/logout", headers=self._headers(token))
+        new = self._login()
+        self.assertEqual(new.status_code, 200)
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(new.json()["access_token"])).status_code, 200)
+
+    def test_logout_needs_a_valid_token(self):
+        self.assertEqual(self.client.post("/auth/logout").status_code, 401)
+        bad = self.client.post("/auth/logout", headers={"Authorization": "Bearer bad.token"})
+        self.assertEqual(bad.status_code, 401)
+
+    def test_logout_does_not_end_another_accounts_sessions(self):
+        alice = self._register().json()["access_token"]
+        bob = self._register(email="bob@example.com").json()["access_token"]
+        self.client.post("/auth/logout", headers=self._headers(alice))
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(bob)).status_code, 200)
+
+    def test_a_revoked_token_is_rejected_by_every_checked_route(self):
+        token = self._register().json()["access_token"]
+        self.client.post("/auth/logout", headers=self._headers(token))
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(token)).status_code, 401)
+        self.assertEqual(self._change_password(token).status_code, 401)
+        self.assertEqual(self._delete(token, "Secret123!").status_code, 401)
+        self.assertEqual(self.client.post("/auth/logout", headers=self._headers(token)).status_code, 401)
+
+    def test_password_change_ends_sessions_on_other_devices(self):
+        here = self._register().json()["access_token"]
+        elsewhere = self._login().json()["access_token"]
+        self.assertEqual(self._change_password(here).status_code, 200)
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(elsewhere)).status_code, 401)
+
+    def test_password_change_is_limited_per_account(self):
+        token = self._register().json()["access_token"]
+        for i in range(5):
+            with self.subTest(attempt=i + 1):
+                self.assertEqual(self._change_password(token, current="wrong").status_code, 401)
+        self.assertEqual(self._change_password(token, current="wrong").status_code, 429)
+        self.assertEqual(self._change_password(token).status_code, 429,
+                         "the correct password must not get past the limit")
+
+    def test_password_limit_does_not_block_another_account(self):
+        alice = self._register().json()["access_token"]
+        bob = self._register(email="bob@example.com").json()["access_token"]
+        for _ in range(6):
+            self._change_password(alice, current="wrong")
+        self.assertEqual(self._change_password(bob, current="wrong").status_code, 401)
+
+    def test_account_deletion_is_limited_per_account(self):
+        token = self._register().json()["access_token"]
+        for i in range(5):
+            with self.subTest(attempt=i + 1):
+                self.assertEqual(self._delete(token, "wrong").status_code, 401)
+        self.assertEqual(self._delete(token, "wrong").status_code, 429)
+        self.assertEqual(self._delete(token, "Secret123!").status_code, 429,
+                         "the correct password must not get past the limit")
+        self.assertEqual(len(self.store["users"]), 1, "the account must still exist")
+
+    def test_login_is_limited_per_account_whatever_the_address(self):
+        from unittest import mock
+        import api as app_module
+
+        self.assertEqual(self._register().status_code, 201)
+        credentials = {"email": "alice@example.com", "password": "Secret123!"}
+        with mock.patch.object(app_module, "TRUSTED_PROXY_HOPS", 1):
+            # A new address on every attempt: only the per-account limit can refuse the eleventh.
+            for i in range(10):
+                with self.subTest(attempt=i + 1):
+                    r = self.client.post("/auth/login", json=credentials,
+                                         headers={"X-Forwarded-For": f"203.0.113.{i}"})
+                    self.assertEqual(r.status_code, 200)
+            r = self.client.post("/auth/login", json=credentials, headers={"X-Forwarded-For": "203.0.113.10"})
+            self.assertEqual(r.status_code, 429)
+            self.assertNotIn("access_token", r.text)
+            other = self.client.post("/auth/login", headers={"X-Forwarded-For": "203.0.113.11"},
+                                     json={"email": "bob@example.com", "password": "Secret123!"})
+            self.assertEqual(other.status_code, 401, "another account must not be refused by this limit")
 
 
 @unittest.skipUnless(FASTAPI_AVAILABLE, _SKIP_HTTP)

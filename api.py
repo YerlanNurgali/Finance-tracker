@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 import csv
+import hashlib
 import io
+import ipaddress
 import json
 import logging
 import math
@@ -19,6 +21,7 @@ from typing import Optional
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from limits import parse as parse_rate_limit  # already installed as a slowapi dependency
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 from starlette.responses import PlainTextResponse
@@ -34,7 +37,87 @@ BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 VALID_PERIODS = {"all", "today", "week", "month"}
 
-limiter = Limiter(key_func=get_remote_address)
+FORWARDED_ALLOW_IPS_ENV = "FORWARDED_ALLOW_IPS"
+TRUSTED_PROXY_HOPS_ENV = "TRUSTED_PROXY_HOPS"
+LOGIN_EMAIL_RATE = parse_rate_limit("10/minute")
+
+
+def check_forwarded_allow_ips(environ) -> None:
+    """On Render uvicorn must not take the client address from X-Forwarded-For. With "*" any client
+    can choose the address the connection is counted under, so every per-address limit can be bypassed."""
+    if (environ.get("RENDER") or "").strip().lower() != "true":
+        return
+    entries = [item.strip() for item in (environ.get(FORWARDED_ALLOW_IPS_ENV) or "").split(",")]
+    if "*" in entries:
+        raise RuntimeError("FORWARDED_ALLOW_IPS=* is refused on Render: set it to 127.0.0.1 or remove it")
+
+
+def parse_trusted_proxy_hops(raw) -> int:
+    text = (raw or "").strip()
+    if not text:
+        return 0
+    try:
+        hops = int(text)
+    except ValueError:
+        raise RuntimeError("TRUSTED_PROXY_HOPS must be a whole number")
+    if not 0 <= hops <= 5:
+        raise RuntimeError("TRUSTED_PROXY_HOPS must be between 0 and 5")
+    return hops
+
+
+check_forwarded_allow_ips(os.environ)
+TRUSTED_PROXY_HOPS = parse_trusted_proxy_hops(os.environ.get(TRUSTED_PROXY_HOPS_ENV))
+
+
+def _normalised_address(text: str) -> str:
+    """One spelling per address: ::ffff:a.b.c.d is the IPv4 address a.b.c.d, and IPv6 is compact and lower-case."""
+    address = ipaddress.ip_address(text)
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return str(address.ipv4_mapped)
+    return str(address)
+
+
+def client_ip(request: Request) -> str:
+    """The address the rate limits count.
+
+    By default the connection's address is used and X-Forwarded-For is ignored. When TRUSTED_PROXY_HOPS
+    is the number of proxies in front of the app, the address the nearest proxy appended is used: an
+    entry of X-Forwarded-For counted from the right, which a client cannot choose. A missing or malformed
+    header falls back to the connection's address. Every address is written in one form, so the same
+    client cannot get two counters.
+    """
+    if TRUSTED_PROXY_HOPS:
+        parts = [item.strip() for item in request.headers.get("x-forwarded-for", "").split(",") if item.strip()]
+        if len(parts) >= TRUSTED_PROXY_HOPS:
+            try:
+                return _normalised_address(parts[-TRUSTED_PROXY_HOPS])
+            except ValueError:
+                pass
+    connection = get_remote_address(request)
+    try:
+        return _normalised_address(connection)
+    except ValueError:
+        return connection  # not an address (the test client's name): counted as it is
+
+
+limiter = Limiter(key_func=client_ip)
+
+
+def _user_rate_key(request: Request) -> str:
+    # Signed-in calls are counted per account, so every user has their own counter even behind a proxy.
+    # Auth itself is enforced by get_current_user; this only picks the counter.
+    authorization = request.headers.get("authorization", "")
+    if authorization.startswith("Bearer "):
+        payload = auth.verify_access_token(authorization.split(" ", 1)[1])
+        if payload and "user_id" in payload:
+            return f"user:{payload['user_id']}"
+    return client_ip(request)
+
+
+def _login_email_allowed(email: str) -> bool:
+    """Login is also limited per account, whatever address the attempts come from."""
+    digest = hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
+    return limiter.limiter.hit(LOGIN_EMAIL_RATE, "login-email", digest)
 
 
 class UTF8JSONResponse(JSONResponse):
@@ -409,6 +492,9 @@ def register_user(request: Request, payload: RegisterPayload):
 @app.post("/auth/login")
 @limiter.limit("10/minute")
 def login_user(request: Request, payload: LoginPayload):
+    if not _login_email_allowed(payload.email):
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа. Попробуйте через минуту.",
+                            headers={"Retry-After": "60"})
     user_row = database.get_user_by_email(payload.email)
     if not user_row or not auth.verify_password(user_row[2], payload.password):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
@@ -439,7 +525,8 @@ def update_profile(payload: ProfileSettingsPayload, current_user: dict = Depends
 
 
 @app.put("/auth/password")
-def change_password(payload: PasswordChangePayload, current_user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute", key_func=_user_rate_key)
+def change_password(request: Request, payload: PasswordChangePayload, current_user: dict = Depends(get_current_user)):
     user_row = database.get_user_by_id(current_user["id"])
     if not user_row or not auth.verify_password(user_row[2], payload.current_password):
         raise HTTPException(status_code=401, detail="Неверный текущий пароль")
@@ -453,8 +540,17 @@ def change_password(payload: PasswordChangePayload, current_user: dict = Depends
     return {"message": "Пароль изменен", "access_token": token, "token_type": "bearer"}
 
 
+@app.post("/auth/logout")
+def logout(current_user: dict = Depends(get_current_user)):
+    # Ends every session of this account, on every device: the token_version check in
+    # get_current_user rejects all tokens issued before this call.
+    database.revoke_all_sessions(current_user["id"])
+    return {"message": "Сессии завершены"}
+
+
 @app.delete("/auth/delete")
-def delete_account(payload: DeleteAccountPayload, current_user: dict = Depends(get_current_user)):
+@limiter.limit("5/minute", key_func=_user_rate_key)
+def delete_account(request: Request, payload: DeleteAccountPayload, current_user: dict = Depends(get_current_user)):
     user_row = database.get_user_by_id(current_user["id"])
     if not user_row or not auth.verify_password(user_row[2], payload.password):
         raise HTTPException(status_code=401, detail="Неверный пароль")
@@ -735,18 +831,6 @@ def delete_category(category_id: int, move_to: Optional[str] = Query(None, max_l
 # --- Bank CSV import ---
 IMPORT_PREVIEW_LIMIT = 100
 _IMPORT_ERROR_STATUS = {"file_too_large": 413, "invalid_settings": 422}
-
-
-def _user_rate_key(request: Request) -> str:
-    # Behind a proxy every client can share one IP address, so the import
-    # limits count per signed-in user. Auth itself is enforced by
-    # get_current_user; this only picks the counter.
-    authorization = request.headers.get("authorization", "")
-    if authorization.startswith("Bearer "):
-        payload = auth.verify_access_token(authorization.split(" ", 1)[1])
-        if payload and "user_id" in payload:
-            return f"user:{payload['user_id']}"
-    return get_remote_address(request)
 
 
 def import_settings(

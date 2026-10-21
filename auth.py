@@ -6,11 +6,35 @@ import base64
 import json
 from datetime import datetime, timedelta
 
-# Without a configured key every process signs with its own random one, so
-# tokens stop working after a restart. An empty value is treated as missing:
-# an empty HMAC key would let anyone sign tokens.
-SECRET_KEY_CONFIGURED = bool(os.getenv("SECRET_KEY"))
-SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+MIN_SECRET_KEY_LENGTH = 32
+
+
+class SecretKeyError(RuntimeError):
+    """The service must not start: the signing key is missing or too short in production."""
+
+
+def load_secret_key(environ) -> tuple:
+    """Return (key, configured) for the token signing key.
+
+    On Render (RENDER=true) a missing or short SECRET_KEY stops the start, so tokens can never be
+    signed with a key that changes on every restart or that is easy to guess. Elsewhere a missing
+    key gets a random one for this process only, as before. The value is never included in errors.
+    """
+    # The value is used exactly as set, so an existing deployment keeps the same signing key.
+    value = environ.get("SECRET_KEY") or ""
+    if (environ.get("RENDER") or "").strip().lower() == "true":
+        if not value.strip():
+            raise SecretKeyError("SECRET_KEY is not set on Render: the service does not start without it")
+        if len(value) < MIN_SECRET_KEY_LENGTH:
+            raise SecretKeyError(f"SECRET_KEY must be at least {MIN_SECRET_KEY_LENGTH} characters on Render")
+        return value, True
+    if value.strip():
+        return value, True
+    return secrets.token_hex(32), False
+
+
+# An empty value is treated as missing: an empty HMAC key would let anyone sign tokens.
+SECRET_KEY, SECRET_KEY_CONFIGURED = load_secret_key(os.environ)
 
 def hash_password(password: str) -> str:
     """Hash password using PBKDF2-HMAC-SHA256 with a random salt."""

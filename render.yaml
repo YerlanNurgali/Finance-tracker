@@ -11,7 +11,11 @@ services:
       # every restart signs with a new random key and signs all users out.
       - key: SECRET_KEY
         sync: false
-      # Render's proxy is the only client of this service, so uvicorn may trust its forwarded
-      # address: without this every user shares one IP and one login/registration rate limit.
+      # uvicorn must not take the client address from X-Forwarded-For ("*" is refused at start on Render).
       - key: FORWARDED_ALLOW_IPS
-        value: "*"
+        value: "127.0.0.1"
+      # Number of proxies in front of the app. Set it to 1 only after the test service confirms that the
+      # proxy appends the client's address on the right of X-Forwarded-For. Left empty, every client counts
+      # under the proxy's address and the login and registration limits are shared by all users.
+      - key: TRUSTED_PROXY_HOPS
+        sync: false

@@ -516,6 +516,13 @@ def update_user_password(user_id: int, new_password_hash: str):
             )
 
 
+def revoke_all_sessions(user_id: int):
+    """Bumps token_version so every token issued before now stops working, on every device."""
+    with _transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE users SET token_version = token_version + 1 WHERE id = %s", (user_id,))
+
+
 def delete_user_account(user_id: int):
     with _transaction() as connection:
         with connection.cursor() as cursor:
