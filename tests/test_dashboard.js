@@ -83,6 +83,16 @@ function jsonResponse(status, body) {
     };
 }
 
+// A fetch answer that honours the request's signal, as a browser's fetch does: once the signal aborts,
+// the request rejects even if the server has not answered.
+function abortable(answer, signal) {
+    if (!signal) return answer;
+    return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(Object.assign(new Error("The operation was aborted."), { name: "AbortError" })));
+        Promise.resolve(answer).then(resolve, reject);
+    });
+}
+
 // autoElements: every getElementById() finds an element, so the page's real
 // DOMContentLoaded set-up can run (app.init()) and its own handlers be clicked.
 // queries: elements that document.querySelectorAll(selector) returns, so the
@@ -103,6 +113,7 @@ function createApp({ routes = {}, ids = [...DASHBOARD_IDS, ...IMPORT_IDS], stora
     const context = {
         console,
         Intl,
+        AbortController,
         URLSearchParams,
         URL: {
             createObjectURL: (blob) => { downloads.push({ blob }); return `blob:finance.test/${downloads.length}`; },
@@ -139,7 +150,8 @@ function createApp({ routes = {}, ids = [...DASHBOARD_IDS, ...IMPORT_IDS], stora
             calls.push({ path: pathname + search, method: options.method || "GET", body: options.body, headers: options.headers });
             const handler = routes[`${options.method || "GET"} ${pathname}`];
             if (!handler) return jsonResponse(404, { detail: "Not found" });
-            const [status, body] = typeof handler === "function" ? await handler() : handler;
+            const answer = typeof handler === "function" ? handler() : handler;
+            const [status, body] = await abortable(answer, options.signal);
             return jsonResponse(status, body);
         }
     };
@@ -393,11 +405,12 @@ test("HTML in the email is shown in the user badge only as text", () => {
     assertTextOnly(app.elements.get("user-auth-area"));
 });
 
-test("logging out removes the token, email and the financial snapshot", () => {
+test("logging out removes the token, email and the financial snapshot", async () => {
     const app = createApp({ ids: AUTH_IDS, storage: staleSnapshot() });
     app.run("renderUserBadge()");
     const logout = allNodes(app.elements.get("user-auth-area")).find((node) => node.id === "logout-btn");
     logout.onclick();
+    await settle(); // the device is signed out at once; the background request to end the sessions gets a 404 here (no route) and changes nothing
     for (const key of [SNAPSHOT_KEY, "finance_tracker_token", "finance_tracker_email"]) {
         assert.equal(app.store.has(key), false, `${key} is removed`);
     }
@@ -462,6 +475,7 @@ test("signing out removes the previous user's figures from the page", async () =
 
     app.run("renderUserBadge()");
     allNodes(app.elements.get("user-auth-area")).find((node) => node.id === "logout-btn").onclick();
+    await settle();
 
     // Only this user's values are checked: the category filter keeps its fixed,
     // shared list of standard categories.
@@ -754,6 +768,36 @@ test("a late 401 from the previous session does not sign out the next user", asy
     assert.equal(app.store.get("finance_tracker_token"), "next-token");
     assert.equal(app.el("auth-modal").hidden, true);
     assert.equal(historyItems(app).length, 1, "the next user's dashboard stays");
+});
+
+test("a late 401 for the previous token does not remove the token another tab has stored since", async () => {
+    const late = deferred();
+    const app = await boot({ "DELETE /goals/9": () => late.promise });
+    app.el("auth-modal").hidden = true; // as in the HTML, where a signed-in page starts with the dialog hidden
+    const pending = app.run("deleteGoal(9)");
+    const shown = historyItems(app).length;
+    // Another tab signs in as the next user and stores its token. This tab's session generation does not change.
+    app.store.set("finance_tracker_token", "next-token");
+    app.store.set("finance_tracker_email", NEXT_USER);
+    late.release([401, { detail: SESSION_EXPIRED }]);
+    await pending;
+    await settle();
+    assert.equal(app.store.get("finance_tracker_token"), "next-token");
+    assert.equal(app.store.get("finance_tracker_email"), NEXT_USER);
+    assert.equal(app.el("auth-modal").hidden, true, "the sign-in dialog is not shown for the old answer");
+    assert.equal(historyItems(app).length, shown);
+});
+
+test("a 401 for the token still stored ends the session as before", async () => {
+    const late = deferred();
+    const app = await boot({ "DELETE /goals/9": () => late.promise });
+    const pending = app.run("deleteGoal(9)");
+    late.release([401, { detail: SESSION_EXPIRED }]);
+    await pending;
+    await settle();
+    assert.equal(app.store.has("finance_tracker_token"), false);
+    assert.equal(app.store.has("finance_tracker_email"), false);
+    assert.equal(app.el("auth-modal").hidden, false);
 });
 
 // R3 --------------------------------------------------------------------------
@@ -1530,4 +1574,92 @@ test("the success message of signing in and registering is in the interface lang
     await settle();
     assert.ok(register.calls.some((call) => call.path === "/auth/register"));
     assert.equal(notice(register), "Аккаунт сәтті жасалды!");
+});
+
+// --- Sign-out: the server is asked first, the device always signs out ---------
+
+const LOGOUT = "POST /auth/logout";
+const signedOutOf = (app) => !app.store.has("finance_tracker_token") && !app.store.has("finance_tracker_email");
+const signOutButton = (app) => app.el("user-auth-area").children
+    .flatMap((badge) => badge.children)
+    .find((node) => node.id === "logout-btn");
+const logoutCalls = (app) => app.calls.filter((call) => call.path === "/auth/logout");
+const signedInApp = (routes) => createApp({ routes: { ...apiRoutes([]), ...routes }, storage: signedIn(), autoElements: true });
+
+test("sign-out sends the token to the server before it removes the session", async () => {
+    const tokenWhenSent = [];
+    const app = signedInApp({
+        [LOGOUT]: () => { tokenWhenSent.push(app.store.has("finance_tracker_token")); return [200, { message: "Сессии завершены" }]; }
+    });
+    app.init();
+    await settle();
+    signOutButton(app).onclick();
+    await settle();
+    assert.deepEqual(tokenWhenSent, [true], "the token was still stored when the request was sent");
+    assert.equal(logoutCalls(app).length, 1);
+    assert.equal(logoutCalls(app)[0].method, "POST");
+    assert.equal(logoutCalls(app)[0].headers.Authorization, "Bearer test-token");
+    assert.ok(signedOutOf(app));
+    assert.equal(app.el("auth-modal").hidden, false, "the sign-in dialog is shown");
+});
+
+test("sign-out still signs the device out when the server cannot be reached", async () => {
+    const app = signedInApp({ [LOGOUT]: () => { throw new TypeError("Failed to fetch"); } });
+    app.init();
+    await settle();
+    signOutButton(app).onclick();
+    await settle();
+    assert.ok(signedOutOf(app));
+    assert.equal(app.el("auth-modal").hidden, false);
+});
+
+test("sign-out ends the device session at once, even if the server never answers", async () => {
+    const app = signedInApp({ [LOGOUT]: () => new Promise(() => {}) });
+    app.init();
+    await settle();
+    const timersBefore = app.timers.length;
+    signOutButton(app).onclick();
+    assert.ok(signedOutOf(app), "signed out before any answer");
+    assert.equal(app.el("auth-modal").hidden, false);
+    assert.equal(logoutCalls(app).length, 1, "the request was started with the token");
+    app.timers[timersBefore]();   // the timeout that sign-out set for its background request
+    await settle();
+    assert.ok(signedOutOf(app));
+});
+
+test("a second click while sign-out is running sends one request", async () => {
+    const app = signedInApp({ [LOGOUT]: [200, { message: "Сессии завершены" }] });
+    app.init();
+    await settle();
+    const button = signOutButton(app);
+    button.onclick();
+    button.onclick();
+    await settle();
+    assert.equal(logoutCalls(app).length, 1);
+    assert.ok(signedOutOf(app));
+});
+
+test("a token already revoked on the server (401) signs out once", async () => {
+    const app = signedInApp({ [LOGOUT]: [401, { detail: "Недействительный или просроченный токен" }] });
+    app.init();
+    await settle();
+    signOutButton(app).onclick();
+    await settle();
+    assert.equal(logoutCalls(app).length, 1);
+    assert.ok(signedOutOf(app));
+    assert.equal(app.el("auth-modal").hidden, false);
+});
+
+test("a sign-in made while the logout request is pending is not cleared by its answer", async () => {
+    let answer;
+    const app = signedInApp({ [LOGOUT]: () => new Promise((resolve) => { answer = resolve; }) });
+    app.init();
+    await settle();
+    signOutButton(app).onclick();
+    await settle();
+    // Another tab signs in while this logout request is still waiting: it stores its own token.
+    app.store.set("finance_tracker_token", "fresh-token");
+    answer([200, { message: "Сессии завершены" }]);
+    await settle();
+    assert.equal(app.store.get("finance_tracker_token"), "fresh-token", "the answer must not remove the other tab's token");
 });

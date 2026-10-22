@@ -208,11 +208,7 @@ function renderUserBadge() {
         logoutButton.textContent = i18n.t("signOut");
         badge.append(label, logoutButton);
         area.appendChild(badge);
-        logoutButton.onclick = () => {
-            clearSession();
-            renderUserBadge();
-            showAuthModal();
-        };
+        logoutButton.onclick = () => signOut();
     } else {
         area.replaceChildren();
         const loginBtn = document.createElement("button");
@@ -249,6 +245,36 @@ function clearSession() {
     setSettingsReady(false);
     clearDashboardView();
     refreshCategoryControls();  // the previous user's categories leave every list
+}
+
+// How long the background request to end the account's sessions may run. Nothing waits for it.
+const LOGOUT_TIMEOUT_MS = 5000;
+
+// Signs this device out at once. The request that ends the account's sessions is started first, with
+// this session's token, and its answer changes nothing on this device: a failure, a 401 (the token is
+// already revoked) or a timeout all leave the device signed out.
+function signOut() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (token) revokeSessions(token);  // dispatches the request before the local session is cleared
+    clearSession();
+    renderUserBadge();
+    showAuthModal();
+}
+
+async function revokeSessions(token) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LOGOUT_TIMEOUT_MS);
+    try {
+        await fetch(`${API_URL}/auth/logout`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}` },
+            signal: controller.signal
+        });
+    } catch (_) {
+        // Offline, refused or timed out: this device still signs out.
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 // Removes the previous user's figures from the page, which stays visible
@@ -326,10 +352,12 @@ async function requestResponse(path, options = {}) {
         error.status = response.status;
         error.detail = detail;
         if (response.status === 401 && !CREDENTIAL_ERRORS.includes(detail)) {
-            // Missing, expired or revoked token. A late answer to a request of an
-            // earlier session must not end the session that replaced it.
+            // Missing, expired or revoked token. The answer ends the session only while the request
+            // belongs to it: same session, and the token it was sent with is still the stored one. A late
+            // answer to an earlier session, or to a token another tab has since replaced, must not end
+            // the session that replaced it.
             error.sessionEnded = true;
-            if (generation === sessionGeneration) {
+            if (generation === sessionGeneration && localStorage.getItem(TOKEN_KEY) === token) {
                 clearSession();
                 renderUserBadge();
                 showAuthModal();
