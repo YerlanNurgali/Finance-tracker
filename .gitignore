@@ -9,3 +9,8 @@ finance_tracker.db
 .env
 __pycache__/
 .pytest_cache/
+
+# Graphify: локальный кэш, история сессий и генерируемые артефакты
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/graph.html
