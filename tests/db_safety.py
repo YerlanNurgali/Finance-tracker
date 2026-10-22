@@ -78,6 +78,8 @@ except ModuleNotFoundError as _missing:  # no driver at all: nothing can connect
     parse_dsn = None
 
 SANDBOX_SCHEMA = "ft_test"
+# The one port a sandbox may listen on: tests/pg_sandbox.py and the connection guard both use it.
+SANDBOX_PORT = "55432"
 MARKER_TABLE = "ft_test_sandbox_marker"
 SANDBOX_URL_VARIABLE = "FT_TEST_POSTGRES_URL"
 SANDBOX_TOKEN_VARIABLE = "FT_TEST_POSTGRES_TOKEN"
@@ -200,7 +202,7 @@ def option_settings(options):
 
 def check_gate(gate):
     """Raises SafetyError unless ``gate`` is a Gate for a local ft_test sandbox: a literal
-    loopback address, a numeric port, ft_test names and only the known option sets.
+    loopback address, the sandbox port (SANDBOX_PORT), ft_test names and only the known option sets.
     This does NOT prove the server is local (see the module docstring)."""
     if type(gate) is not Gate:
         raise SafetyError("the gate is not a db_safety.Gate")
@@ -209,6 +211,8 @@ def check_gate(gate):
         raise SafetyError("the gate is only for 127.0.0.1 or ::1")
     if not isinstance(port, str) or not _PORT.match(port) or int(port) > 65535:
         raise SafetyError("the gate needs a numeric port")
+    if port != SANDBOX_PORT:
+        raise SafetyError("the gate is only for the sandbox port %s" % SANDBOX_PORT)
     if not isinstance(dbname, str) or not isinstance(user, str) or not _NAME.match(dbname) or not _NAME.match(user):
         raise SafetyError("the gate is only for an ft_test database and role")
     if (not isinstance(settings, tuple) or not settings
@@ -666,6 +670,8 @@ def sandbox_config(environ=None, require_token=True):
         raise SafetyError("the sandbox must be addressed as 127.0.0.1 or [::1] (not localhost, not a remote host)")
     if port is None:
         raise SafetyError("the sandbox URL needs an explicit port")
+    if str(port) != SANDBOX_PORT:
+        raise SafetyError("the sandbox must listen on port %s, not another port" % SANDBOX_PORT)
     if parts.path.count("/") != 1 or not _NAME.match(parts.path[1:]):
         raise SafetyError("the sandbox database name must look like ft_test or ft_test_<name>")
     if not user or not _NAME.match(user):

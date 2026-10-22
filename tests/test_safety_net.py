@@ -126,6 +126,7 @@ def test_an_ambient_pg_variable_refuses_even_the_sandbox(name):
     db_safety.Gate("localhost", "55432", "ft_test_sandbox", "ft_test_runner", (db_safety.WRITE_SETTINGS,)),
     db_safety.Gate("127.0.0.1", "port", "ft_test_sandbox", "ft_test_runner", (db_safety.WRITE_SETTINGS,)),
     db_safety.Gate("127.0.0.1", "70000", "ft_test_sandbox", "ft_test_runner", (db_safety.WRITE_SETTINGS,)),
+    db_safety.Gate("127.0.0.1", "5432", "ft_test_sandbox", "ft_test_runner", (db_safety.WRITE_SETTINGS,)),
     db_safety.Gate("127.0.0.1", "55432", "neondb", "ft_test_runner", (db_safety.WRITE_SETTINGS,)),
     db_safety.Gate("127.0.0.1", "55432", "ft_test_sandbox", "postgres", (db_safety.WRITE_SETTINGS,)),
     db_safety.Gate("127.0.0.1", "55432", "ft_test_sandbox", "ft_test_runner", (frozenset(["search_path=public"]),)),
@@ -611,10 +612,27 @@ def test_a_valid_sandbox_configuration():
 
 @pytest.mark.parametrize("url,host", [
     ("postgresql://ft_test_runner@[::1]:55432/ft_test_sandbox", "::1"),
-    ("postgres://ft_test_x:pw@127.0.0.1:5432/ft_test_y", "127.0.0.1"),
+    ("postgres://ft_test_x:pw@127.0.0.1:55432/ft_test_y", "127.0.0.1"),
 ])
 def test_other_loopback_forms_are_valid(url, host):
     assert db_safety.sandbox_config(sandbox_environment(**{db_safety.SANDBOX_URL_VARIABLE: url})).host == host
+
+
+@pytest.mark.parametrize("port", ["5432", "5433", "55431", "55433", "2000", "65535", "1"])
+def test_a_sandbox_on_any_port_but_the_sandbox_port_is_refused(port):
+    url = "postgresql://ft_test_runner:pw@127.0.0.1:%s/ft_test_sandbox" % port
+    with pytest.raises(db_safety.SafetyError):
+        db_safety.sandbox_config(sandbox_environment(**{db_safety.SANDBOX_URL_VARIABLE: url}))
+    with pytest.raises(db_safety.SafetyError):
+        db_safety.check_gate(db_safety.Gate("127.0.0.1", port, "ft_test_sandbox", "ft_test_runner",
+                                            (db_safety.WRITE_SETTINGS,)))
+
+
+def test_the_sandbox_port_is_55432_for_the_url_and_the_gate():
+    assert db_safety.SANDBOX_PORT == "55432"
+    assert db_safety.sandbox_config(sandbox_environment()).port == "55432"
+    db_safety.check_gate(db_safety.Gate("127.0.0.1", "55432", "ft_test_sandbox", "ft_test_runner",
+                                        (db_safety.WRITE_SETTINGS,)))
 
 
 @pytest.mark.parametrize("value", [None, "", "   "])

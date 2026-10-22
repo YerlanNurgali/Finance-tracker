@@ -55,6 +55,11 @@ CREATE ROLE ft_test_runner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATI
 CREATE DATABASE ft_test_sandbox;
 REVOKE ALL ON DATABASE ft_test_sandbox FROM PUBLIC;
 GRANT CONNECT ON DATABASE ft_test_sandbox TO ft_test_runner;
+-- Timeouts for this role in this database only; the server's own settings stay as they are. Each ALTER
+-- replaces the value it sets, so these three lines can be run again on their own on an existing sandbox.
+ALTER ROLE ft_test_runner IN DATABASE ft_test_sandbox SET lock_timeout = '5s';
+ALTER ROLE ft_test_runner IN DATABASE ft_test_sandbox SET statement_timeout = '10s';
+ALTER ROLE ft_test_runner IN DATABASE ft_test_sandbox SET idle_in_transaction_session_timeout = '30s';
 -- The sandbox role must not be able to connect to any other database of the server.
 -- Repeat this line for every other database that allows connections:
 REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;
