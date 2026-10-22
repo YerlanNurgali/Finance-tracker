@@ -81,6 +81,48 @@ def levels(user_id=1):
         "WHERE b.user_id = %s ORDER BY s.month, s.budget_id", (user_id,))]
 
 
+WORKER_TIMEOUT = 30  # seconds a barrier or a thread may take; the sandbox answers in milliseconds
+
+
+def run_concurrently(jobs):
+    """Runs each job in its own thread, released together, and returns the values in order.
+
+    Nothing waits forever: the barrier and every join have WORKER_TIMEOUT, and a thread still running after
+    that fails the test. A job's exception is kept with its thread, and the test fails with it (as the cause)
+    once every thread has ended. A thread that cannot pass the barrier gets BrokenBarrierError, because the
+    barrier is aborted when the test stops waiting, so no other thread stays blocked."""
+    barrier = threading.Barrier(len(jobs), timeout=WORKER_TIMEOUT)
+    outcomes = [None] * len(jobs)
+
+    def worker(index):
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError as exc:
+            outcomes[index] = ("error", exc)
+            return
+        try:
+            outcomes[index] = ("ok", jobs[index]())
+        except BaseException as exc:  # kept here and raised by the test, never lost with the thread
+            outcomes[index] = ("error", exc)
+
+    threads = [threading.Thread(target=worker, args=(index,), name="worker-%d" % index)
+               for index in range(len(jobs))]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(WORKER_TIMEOUT)
+    finally:
+        barrier.abort()  # releases a thread still waiting on the barrier; harmless once every thread has passed it
+    stuck = [thread.name for thread in threads if thread.is_alive()]
+    assert not stuck, "threads still running %d s after the start: %s" % (WORKER_TIMEOUT, ", ".join(stuck))
+    failed = [value for kind, value in outcomes if kind == "error"]
+    if failed:
+        raise AssertionError("%d of %d worker(s) failed:\n%s" % (
+            len(failed), len(jobs), "\n".join(repr(error) for error in failed))) from failed[0]
+    return [value for _, value in outcomes]
+
+
 # --- Migration of an older database --------------------------------------------------
 
 def test_migration_keeps_every_existing_row_and_turns_alerts_on(legacy):
@@ -304,22 +346,7 @@ def test_concurrent_requests_report_a_crossing_exactly_once(pg):
     assert check() == [] and levels() == [("2026-10", 0)]   # the state row exists, so only its lock serialises
     for _ in range(3):
         spend(1, 30)                                # 100 spent: crossed, nobody has evaluated yet
-    results, errors = [], []
-    barrier = threading.Barrier(8)
-
-    def worker():
-        try:
-            barrier.wait()
-            results.append(check())
-        except Exception as exc:  # pragma: no cover - reported below
-            errors.append(exc)
-
-    threads = [threading.Thread(target=worker) for _ in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert not errors
+    results = run_concurrently([check] * 8)
     assert sum(len(alerts) for alerts in results) == 1
     assert levels() == [("2026-10", 2)]
 
@@ -329,23 +356,12 @@ def test_concurrent_requests_for_several_budgets_do_not_deadlock(pg):
         budget(1, category, 100)
         spend(1, 90, OCT, category)
     categories = ["Еда", "Дом", "Здоровье"]
-    results, errors = [], []
-    barrier = threading.Barrier(6)
-
-    def worker(order):
-        try:
-            barrier.wait()
-            results.append(database.evaluate_budget_alerts(1, [(c, "2026-10", True) for c in order]))
-        except Exception as exc:  # pragma: no cover
-            errors.append(exc)
-
     orders = [categories, categories[::-1], categories[1:] + categories[:1]] * 2
-    threads = [threading.Thread(target=worker, args=(order,)) for order in orders]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
-    assert not errors and len(results) == 6
+    results = run_concurrently([
+        lambda order=order: database.evaluate_budget_alerts(1, [(c, "2026-10", True) for c in order])
+        for order in orders
+    ])
+    assert len(results) == 6
     assert sum(len(alerts) for alerts in results) == 3, "one alert per budget, however the requests interleave"
 
 
@@ -530,22 +546,10 @@ def test_the_listing_uses_the_calendar_month_on_real_data(http):
 def test_concurrent_requests_through_the_api_alert_once(http):
     user = sign_up(http, "race@example.test")
     http.post("/budgets", headers=user, json={"category": "Еда", "amount": 1000})
-    responses, errors = [], []
-    barrier = threading.Barrier(6)
-
     def post():
-        try:
-            client = TestClient(api.app)
-            barrier.wait()
-            responses.append(add_expense(client, user, 150))
-        except Exception as exc:  # pragma: no cover
-            errors.append(exc)
+        return add_expense(TestClient(api.app), user, 150)
 
-    threads = [threading.Thread(target=post) for _ in range(6)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
-    assert not errors and len(responses) == 6 and all(r.status_code == 201 for r in responses)
+    responses = run_concurrently([post] * 6)
+    assert len(responses) == 6 and all(r.status_code == 201 for r in responses)
     alerts = [a for r in responses for a in r.json()["alerts"]]
     assert [(a["category"], a["level"]) for a in alerts] == [("Еда", "warning")], "900 of 1000 crossed 80 % exactly once"

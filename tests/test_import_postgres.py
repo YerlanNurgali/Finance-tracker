@@ -65,21 +65,52 @@ def test_import_dedup_and_isolation_on_postgres(pg):
     assert _sql("SELECT user_id, count(*) FROM operations GROUP BY user_id ORDER BY user_id") == [(1, 3), (2, 2)]
 
 
+WORKER_TIMEOUT = 30  # seconds a barrier or a thread may take; the sandbox answers in milliseconds
+
+
+def run_concurrently(jobs):
+    """Runs each job in its own thread, released together, and returns the values in order.
+
+    Nothing waits forever: the barrier and every join have WORKER_TIMEOUT, and a thread still running after
+    that fails the test. A job's exception is kept with its thread, and the test fails with it (as the cause)
+    once every thread has ended. A thread that cannot pass the barrier gets BrokenBarrierError, because the
+    barrier is aborted when the test stops waiting, so no other thread stays blocked."""
+    barrier = threading.Barrier(len(jobs), timeout=WORKER_TIMEOUT)
+    outcomes = [None] * len(jobs)
+
+    def worker(index):
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError as exc:
+            outcomes[index] = ("error", exc)
+            return
+        try:
+            outcomes[index] = ("ok", jobs[index]())
+        except BaseException as exc:  # kept here and raised by the test, never lost with the thread
+            outcomes[index] = ("error", exc)
+
+    threads = [threading.Thread(target=worker, args=(index,), name="worker-%d" % index)
+               for index in range(len(jobs))]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(WORKER_TIMEOUT)
+    finally:
+        barrier.abort()  # releases a thread still waiting on the barrier; harmless once every thread has passed it
+    stuck = [thread.name for thread in threads if thread.is_alive()]
+    assert not stuck, "threads still running %d s after the start: %s" % (WORKER_TIMEOUT, ", ".join(stuck))
+    failed = [value for kind, value in outcomes if kind == "error"]
+    if failed:
+        raise AssertionError("%d of %d worker(s) failed:\n%s" % (
+            len(failed), len(jobs), "\n".join(repr(error) for error in failed))) from failed[0]
+    return [value for _, value in outcomes]
+
+
 def test_concurrent_imports_do_not_duplicate(pg):
     database.create_database()
     batch = _rows(("d;desc;a\n" + "".join(f"{d:02d}.02.2026;Покупка;-{d}0\n" for d in range(1, 21))).encode())
-    barrier = threading.Barrier(4)
-    inserted = []
-
-    def worker():
-        barrier.wait()
-        inserted.append(len(database.import_operations(1, batch)))
-
-    threads = [threading.Thread(target=worker) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    inserted = run_concurrently([lambda: len(database.import_operations(1, batch))] * 4)
     assert sum(inserted) == 20
     assert _sql("SELECT count(*) FROM operations WHERE import_hash IS NOT NULL") == [(20,)]
 

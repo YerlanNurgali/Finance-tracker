@@ -70,23 +70,42 @@ def spend(user_id, category, kind=EXPENSE):
     database.add_operation(user_id, DATE, kind, 10, category)
 
 
+WORKER_TIMEOUT = 30  # seconds a barrier or a thread may take; the sandbox answers in milliseconds
+
+
 def run_in_parallel(count, job):
-    """Runs job(index) in ``count`` threads released together; returns ("ok", value) or ("error", exception)."""
-    barrier = threading.Barrier(count)
+    """Runs job(index) in ``count`` threads released together; returns ("ok", value) or ("error", exception).
+
+    A job's own exception is returned, because the test decides which errors are expected. Nothing waits
+    forever: the barrier and every join have WORKER_TIMEOUT, a thread that cannot pass the barrier gets
+    BrokenBarrierError (returned as an error), and a thread still running afterwards fails the test."""
+    barrier = threading.Barrier(count, timeout=WORKER_TIMEOUT)
     results = [None] * count
 
     def worker(index):
-        barrier.wait()
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError as exc:
+            results[index] = ("error", exc)
+            return
         try:
             results[index] = ("ok", job(index))
         except Exception as exc:  # collected: the test decides which errors are expected
             results[index] = ("error", exc)
 
-    threads = [threading.Thread(target=worker, args=(index,)) for index in range(count)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    threads = [threading.Thread(target=worker, args=(index,), name="worker-%d" % index) for index in range(count)]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(WORKER_TIMEOUT)
+    finally:
+        barrier.abort()  # releases a thread still waiting on the barrier; harmless once every thread has passed it
+    stuck = [thread.name for thread in threads if thread.is_alive()]
+    assert not stuck, "threads still running %d s after the start: %s" % (WORKER_TIMEOUT, ", ".join(stuck))
+    # A thread that ended with an error which is not an Exception (BaseException) records no result.
+    missing = [thread.name for thread, result in zip(threads, results) if result is None]
+    assert not missing, "threads ended without a result (not an Exception): %s" % ", ".join(missing)
     return results
 
 
