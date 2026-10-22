@@ -1,0 +1,55 @@
+# Graphify: граф только по исходному коду (Python, JavaScript, CSS).
+# Синтаксис как у .gitignore: шаблон без "/" действует на любом уровне вложенности,
+# шаблон с "/" привязан к корню проекта, шаблон с "/" в конце относится только к каталогам.
+
+# Документы
+*.md
+*.txt
+*.pdf
+*.docx
+*.doc
+*.rtf
+frontend/index.html
+
+# Изображения
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.svg
+*.ico
+
+# Конфигурация и зависимости
+render.yaml
+requirements.txt
+pytest.ini
+frontend/manifest.json
+.DS_Store
+
+# Секреты и локальные данные
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3
+operations.txt
+
+# Резервные и временные файлы
+*.save
+*backup*
+*.bak
+
+# Миграции, не нужные для первого графа
+migrate_sqlite_to_neon.py
+migrate_to_v2.py
+database_sqlite_backup.py
+
+# Служебные каталоги
+frontend/icons/
+__pycache__/
+.pytest_cache/
+node_modules/
+.venv/
+.venv_new/
+graphify-out/
