@@ -13,6 +13,8 @@ User row tuple: (id, email, password_hash, created_at, token_version)
 
 import os
 import sys
+import threading
+import time
 import unittest
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -41,14 +43,22 @@ def _make_store():
         "budgets":    [],
         "goals":      [],
         "categories": [],   # (id, user_id, kind, name)
+        "row_locks":  {},   # {uid: {"shared": set of connections, "exclusive": connection or None}}
+        "lock_cond":  threading.Condition(),
+        "commit_order": [],  # labels of committed transactions that changed a users row
+        "lock_timeout": 10,  # seconds a statement may wait for a row lock before the test fails
+        "on_lock_wait": None,    # optional callback: a statement starts waiting for a row lock
+        "on_locked_read": None,  # optional callback: a login has read its row under a shared lock
+        "open_connections": 0,   # connections checked out and not yet closed
     }
 
 
 class _Cursor:
     """Minimal in-memory cursor that mirrors real database.py queries."""
 
-    def __init__(self, store):
+    def __init__(self, store, conn=None):
         self.store = store
+        self.conn = conn
         self.rowcount = 0
         self.result = []
 
@@ -148,10 +158,15 @@ class _Cursor:
         if "FROM USERS WHERE ID" in q:
             uid = params[0]
             self.result = [u for u in self.store["users"] if u[0] == uid]
+            if "FOR SHARE" in q:
+                _lock_user_row(self.store, self.conn, uid, exclusive=False, label="login")
+                if self.store["on_locked_read"]:
+                    self.store["on_locked_read"]()
             return
 
         if "UPDATE USERS SET PASSWORD_HASH" in q:
             new_hash, uid = params[0], params[1]
+            _lock_user_row(self.store, self.conn, uid, exclusive=True, label="password")
             self.store["users"] = [
                 (u[0], u[1], new_hash, u[3], u[4] + 1) if u[0] == uid else u
                 for u in self.store["users"]
@@ -161,6 +176,7 @@ class _Cursor:
 
         if "UPDATE USERS SET TOKEN_VERSION" in q:
             uid = params[0]
+            _lock_user_row(self.store, self.conn, uid, exclusive=True, label="logout")
             self.store["users"] = [
                 (u[0], u[1], u[2], u[3], u[4] + 1) if u[0] == uid else u
                 for u in self.store["users"]
@@ -287,14 +303,61 @@ class _Cursor:
         return list(self.result)
 
 
+# ── row locks of the in-memory store ─────────────────────────────────────────────
+# Models the lock that UPDATE and SELECT ... FOR SHARE take on one users row, held until the connection
+# commits, rolls back or closes. A statement that must wait waits on a condition, reports the wait through
+# store["on_lock_wait"], and fails after store["lock_timeout"] instead of hanging: a wait that never ends
+# would mean a deadlock in the code under test.
+
+def _lock_user_row(store, conn, uid, exclusive, label):
+    cond = store["lock_cond"]
+    deadline = time.monotonic() + store["lock_timeout"]
+    with cond:
+        row = store["row_locks"].setdefault(uid, {"shared": set(), "exclusive": None})
+        reported = False
+        while row["exclusive"] not in (None, conn) or (
+                exclusive and any(other is not conn for other in row["shared"])):
+            if not reported and store["on_lock_wait"]:
+                reported = True
+                store["on_lock_wait"]()
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise AssertionError("a row lock was not released in time (a deadlock in the code under test)")
+            cond.wait(left)
+        if exclusive:
+            row["exclusive"] = conn
+        else:
+            row["shared"].add(conn)
+    conn.label = label
+
+
+def _release_user_locks(store, conn):
+    with store["lock_cond"]:
+        for row in store["row_locks"].values():
+            row["shared"].discard(conn)
+            if row["exclusive"] is conn:
+                row["exclusive"] = None
+        store["lock_cond"].notify_all()
+
+
 class _Conn:
     def __init__(self, store):
         self.store = store
+        self.label = None   # what this transaction did to a users row; recorded in commit_order on commit
+        self.closed = False
+        store["open_connections"] = store.get("open_connections", 0) + 1
 
-    def cursor(self):     return _Cursor(self.store)
-    def commit(self):     pass
-    def rollback(self):   pass
-    def close(self):      pass
+    def cursor(self):     return _Cursor(self.store, self)
+    def commit(self):
+        if self.label:
+            self.store["commit_order"].append(self.label)
+        _release_user_locks(self.store, self)
+    def rollback(self):   _release_user_locks(self.store, self)
+    def close(self):
+        _release_user_locks(self.store, self)
+        if not self.closed:
+            self.closed = True
+            self.store["open_connections"] -= 1
 
 
 def _wire(store):
@@ -707,6 +770,255 @@ class TestHttpLogoutAndLimits(_HttpBase):
             other = self.client.post("/auth/login", headers={"X-Forwarded-For": "203.0.113.11"},
                                      json={"email": "bob@example.com", "password": "Secret123!"})
             self.assertEqual(other.status_code, 401, "another account must not be refused by this limit")
+
+
+def _start_thread(target):
+    """Runs target in a thread. Returns (thread, outcome); outcome gets "value" or "error" when target ends."""
+    outcome = {}
+
+    def run():
+        try:
+            outcome["value"] = target()
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, outcome
+
+
+@unittest.skipUnless(FASTAPI_AVAILABLE, _SKIP_HTTP)
+class TestHttpLoginRacingLogout(_HttpBase):
+    """Sign-in, sign-out and password change on the same user row. The store models that row's lock (see
+    _lock_user_row). A sign-in checks the password outside any transaction, then reads the row under a
+    shared lock and issues its token while the lock is held; a logout or a password change must wait for
+    that lock. The hooks pause a sign-in inside its locked read, so the order is forced by events, not by
+    timing. The mock models locks and connections; it is not evidence of PostgreSQL behaviour. No sleep,
+    no real database."""
+
+    CREDENTIALS = {"email": "alice@example.com", "password": "Secret123!"}
+
+    def _user(self):
+        row = self.store["users"][0]
+        return row[0], row[1]
+
+    def test_a_plain_login_issues_a_working_token(self):
+        self.assertEqual(self._register().status_code, 201)
+        response = self._login()
+        self.assertEqual(response.status_code, 200)
+        me = self.client.get("/auth/me", headers=self._headers(response.json()["access_token"]))
+        self.assertEqual(me.status_code, 200)
+
+    def test_a_logout_revokes_the_token_it_was_sent_with(self):
+        token = self._register().json()["access_token"]
+        self.assertEqual(self.client.post("/auth/logout", headers=self._headers(token)).status_code, 200)
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(token)).status_code, 401)
+
+    def test_a_login_after_a_completed_logout_returns_a_working_token(self):
+        import api as app_module
+        import auth
+
+        self.assertEqual(self._register().status_code, 201)
+        uid, email = self._user()
+        app_module.logout(current_user={"id": uid, "email": email})   # token_version becomes 1 first
+        response = self._login()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(auth.verify_access_token(response.json()["access_token"])["tv"], 1)
+        me = self.client.get("/auth/me", headers=self._headers(response.json()["access_token"]))
+        self.assertEqual(me.status_code, 200, "a login that reads the committed version must work")
+
+    def test_a_logout_that_overlaps_a_login_waits_for_it_and_the_login_token_is_revoked_after(self):
+        import api as app_module
+        import auth
+
+        self.assertEqual(self._register().status_code, 201)
+        uid, email = self._user()
+        login_reads_row = threading.Event()
+        release_login = threading.Event()
+        logout_waits = threading.Event()
+
+        def pause_login():
+            login_reads_row.set()
+            if not release_login.wait(10):
+                raise AssertionError("the login was never released")
+
+        self.store["on_locked_read"] = pause_login
+        self.store["on_lock_wait"] = logout_waits.set
+        login_thread, login = _start_thread(
+            lambda: TestClient(app_module.app).post("/auth/login", json=self.CREDENTIALS))
+        self.assertTrue(login_reads_row.wait(10), "the login reads the row under a shared lock")
+        logout_thread, logout = _start_thread(
+            lambda: app_module.logout(current_user={"id": uid, "email": email}))
+        self.assertTrue(logout_waits.wait(10), "the logout waits for the login's shared lock")
+        self.assertTrue(logout_thread.is_alive(), "the logout has not committed while the login holds the lock")
+        release_login.set()
+        login_thread.join(10)
+        logout_thread.join(10)
+        self.assertNotIn("error", login)
+        self.assertNotIn("error", logout)
+        response = login["value"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.store["commit_order"], ["login", "logout"], "the login committed before the logout")
+        self.assertEqual(auth.verify_access_token(response.json()["access_token"])["tv"], 0,
+                         "the login issued its token for the version it read")
+        me = self.client.get("/auth/me", headers=self._headers(response.json()["access_token"]))
+        self.assertEqual(me.status_code, 401, "the logout that came after the login revokes its token")
+        self.assertEqual(me.json().get("detail"), "Токен недействителен. Войдите снова")
+
+    def test_a_password_change_that_overlaps_a_login_waits_for_it_and_revokes_the_login_token(self):
+        import api as app_module
+        import auth
+
+        token = self._register().json()["access_token"]
+        login_reads_row = threading.Event()
+        release_login = threading.Event()
+        change_waits = threading.Event()
+
+        def pause_login():
+            login_reads_row.set()
+            if not release_login.wait(10):
+                raise AssertionError("the login was never released")
+
+        self.store["on_locked_read"] = pause_login
+        self.store["on_lock_wait"] = change_waits.set
+        login_thread, login = _start_thread(
+            lambda: TestClient(app_module.app).post("/auth/login", json=self.CREDENTIALS))
+        self.assertTrue(login_reads_row.wait(10), "the login reads the row under a shared lock")
+        change_thread, change = _start_thread(lambda: TestClient(app_module.app).put(
+            "/auth/password", json={"current_password": "Secret123!", "new_password": "NewPwd456!"},
+            headers=self._headers(token)))
+        self.assertTrue(change_waits.wait(10), "the password change waits for the login's shared lock")
+        release_login.set()
+        login_thread.join(10)
+        change_thread.join(10)
+        self.assertNotIn("error", login)
+        self.assertNotIn("error", change)
+        self.assertEqual(login["value"].status_code, 200)
+        self.assertEqual(change["value"].status_code, 200)
+        self.assertEqual(self.store["commit_order"], ["login", "password"])
+        login_token = login["value"].json()["access_token"]
+        self.assertEqual(auth.verify_access_token(login_token)["tv"], 0)
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(login_token)).status_code, 401,
+                         "the password change that came after the login revokes its token")
+        new_token = change["value"].json()["access_token"]
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(new_token)).status_code, 200,
+                         "the session that the password change issues works")
+
+    def _after_the_password_check(self, action):
+        """Runs action right after a password check succeeds: between the check and the row lock."""
+        import auth
+        from unittest import mock
+
+        real_verify = auth.verify_password
+
+        def check_then(stored, provided):
+            ok = real_verify(stored, provided)
+            if ok:
+                action()
+            return ok
+
+        return mock.patch.object(auth, "verify_password", side_effect=check_then)
+
+    def test_a_logout_between_the_password_check_and_the_lock_gives_a_working_token(self):
+        import api as app_module
+        import auth
+
+        self.assertEqual(self._register().status_code, 201)
+        uid, email = self._user()
+        with self._after_the_password_check(lambda: app_module.logout(current_user={"id": uid, "email": email})):
+            response = self._login()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(auth.verify_access_token(response.json()["access_token"])["tv"], 1,
+                         "the lock returns the version the logout committed")
+        me = self.client.get("/auth/me", headers=self._headers(response.json()["access_token"]))
+        self.assertEqual(me.status_code, 200)
+
+    def test_a_password_change_between_the_check_and_the_lock_refuses_the_login(self):
+        import auth
+        import database
+
+        self.assertEqual(self._register().status_code, 201)
+        uid, _ = self._user()
+        new_hash = auth.hash_password("NewPwd456!")
+        with self._after_the_password_check(lambda: database.update_user_password(uid, new_hash)):
+            response = self._login()
+        self.assertEqual(response.status_code, 401, "the password was checked against a hash that is no longer current")
+        self.assertNotIn("access_token", response.text)
+        self.assertEqual(self.store["commit_order"], ["password"], "only the password change committed")
+        self.assertEqual(self._login(password="NewPwd456!").status_code, 200)
+
+    def test_a_user_deleted_between_the_check_and_the_lock_gets_no_token(self):
+        import database
+
+        self.assertEqual(self._register().status_code, 201)
+        uid, _ = self._user()
+        with self._after_the_password_check(lambda: database.delete_user_account(uid)):
+            response = self._login()
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn("access_token", response.text)
+        self.assertEqual(self.store["users"], [])
+
+    def test_a_wrong_password_checks_outside_any_connection_and_takes_no_lock(self):
+        import auth
+        from unittest import mock
+
+        self.assertEqual(self._register().status_code, 201)
+        real_verify = auth.verify_password
+        open_while_checking = []
+
+        def verify_recording(stored, provided):
+            open_while_checking.append(self.store["open_connections"])
+            return real_verify(stored, provided)
+
+        locked_reads = []
+        self.store["on_locked_read"] = lambda: locked_reads.append(1)
+        with mock.patch.object(auth, "verify_password", side_effect=verify_recording):
+            wrong = self._login(password="Wrong-Password-1")
+            right = self._login()
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(right.status_code, 200)
+        self.assertEqual(open_while_checking, [0, 0], "no database connection is held while PBKDF2 runs")
+        self.assertEqual(locked_reads, [1], "only the correct password reaches the locked read")
+
+    def test_an_error_while_issuing_the_token_releases_the_lock_and_the_connection(self):
+        import auth
+        from unittest import mock
+
+        self.assertEqual(self._register().status_code, 201)
+        locked_reads = []
+        self.store["on_locked_read"] = lambda: locked_reads.append(1)
+        with mock.patch.object(auth, "create_access_token", side_effect=RuntimeError("token issue failed")):
+            with self.assertRaises(RuntimeError):
+                self._login()
+        self.assertEqual(locked_reads, [1], "the failure happened inside the locked block")
+        self.assertEqual(self.store["commit_order"], [], "nothing was committed")
+        self.assertEqual(self.store["open_connections"], 0, "the connection went back to the pool")
+        self.assertTrue(all(not row["shared"] and row["exclusive"] is None
+                            for row in self.store["row_locks"].values()), "the row lock is released")
+
+    def test_an_error_while_checking_the_password_takes_no_lock_and_keeps_no_connection(self):
+        import auth
+        from unittest import mock
+
+        self.assertEqual(self._register().status_code, 201)
+        locked_reads = []
+        self.store["on_locked_read"] = lambda: locked_reads.append(1)
+        with mock.patch.object(auth, "verify_password", side_effect=RuntimeError("check failed")):
+            with self.assertRaises(RuntimeError):
+                self._login()
+        self.assertEqual(locked_reads, [])
+        self.assertEqual(self.store["open_connections"], 0)
+
+    def test_a_login_after_a_password_change_needs_the_new_password(self):
+        token = self._register().json()["access_token"]
+        change = self.client.put("/auth/password", json={"current_password": "Secret123!",
+                                                         "new_password": "NewPwd456!"},
+                                 headers=self._headers(token))
+        self.assertEqual(change.status_code, 200)
+        self.assertEqual(self._login(password="Secret123!").status_code, 401)
+        new = self._login(password="NewPwd456!")
+        self.assertEqual(new.status_code, 200)
+        self.assertEqual(self.client.get("/auth/me", headers=self._headers(new.json()["access_token"])).status_code, 200)
 
 
 @unittest.skipUnless(FASTAPI_AVAILABLE, _SKIP_HTTP)

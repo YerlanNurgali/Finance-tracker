@@ -445,6 +445,23 @@ def get_user_by_email(email: str):
         connection.close()
 
 
+@contextmanager
+def locked_user_for_token(user_id: int):
+    """The user row, read under a shared row lock that lasts until the block ends (the transaction
+    commits then). A logout or a password change writes this row, and an UPDATE waits for a shared
+    lock, so neither can commit while the caller is still reading the row and issuing its token.
+    The caller compares the password hash it checked with this row: a changed hash means a password
+    change came first. The transaction takes this one row lock and waits for nothing else, so it cannot
+    be part of a cycle of waiting transactions."""
+    with _transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, email, password_hash, created_at, token_version FROM users WHERE id = %s FOR SHARE",
+                (user_id,),
+            )
+            yield cursor.fetchone()
+
+
 def get_user_by_id(user_id: int):
     connection = get_connection()
     try:

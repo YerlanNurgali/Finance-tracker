@@ -496,13 +496,18 @@ def login_user(request: Request, payload: LoginPayload):
         raise HTTPException(status_code=429, detail="Слишком много попыток входа. Попробуйте через минуту.",
                             headers={"Retry-After": "60"})
     user_row = database.get_user_by_email(payload.email)
+    # The password is checked outside any transaction: PBKDF2 takes a while and must not hold a pool connection.
     if not user_row or not auth.verify_password(user_row[2], payload.password):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")
-
-    user_id, email = user_row[0], user_row[1]
-    token_version = user_row[4] if len(user_row) > 4 else 0
-    token = auth.create_access_token({"user_id": user_id, "email": email, "tv": token_version})
-    return {"access_token": token, "token_type": "bearer", "email": email}
+    # The token is issued under a shared lock on the current row. The row must still hold the password hash
+    # that was just checked: a password change in between stores a different hash, so the login is refused.
+    # token_version is read under the same lock, so a logout either committed before it (the token is
+    # current) or waits for the login and revokes its token afterwards. See database.locked_user_for_token.
+    with database.locked_user_for_token(user_row[0]) as locked:
+        if not locked or locked[2] != user_row[2]:
+            raise HTTPException(status_code=401, detail="Неверный email или пароль")
+        token = auth.create_access_token({"user_id": locked[0], "email": locked[1], "tv": locked[4]})
+    return {"access_token": token, "token_type": "bearer", "email": locked[1]}
 
 
 @app.get("/auth/me")
